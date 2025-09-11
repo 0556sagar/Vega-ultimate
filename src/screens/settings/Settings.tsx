@@ -8,7 +8,7 @@ import {
   Dimensions,
   Switch,
 } from 'react-native';
-import React, {useCallback, useMemo} from 'react';
+import React, {useCallback, useMemo, useEffect, useState} from 'react';
 import {
   settingsStorage,
   cacheStorageService,
@@ -32,11 +32,67 @@ import useThemeStore from '../../lib/zustand/themeStore';
 import useWatchHistoryStore from '../../lib/zustand/watchHistrory';
 import Animated, {FadeInDown, FadeInUp, Layout} from 'react-native-reanimated';
 import {useNavigation} from '@react-navigation/native';
+import {check, request, PERMISSIONS, RESULTS} from 'react-native-permissions';
 
 import RenderProviderFlagIcon from '../../components/RenderProviderFLagIcon';
 import useAppModeStore from '../../lib/zustand/appModeStore';
 
 type Props = NativeStackScreenProps<SettingsStackParamList, 'Settings'>;
+
+// Notification permission component
+const NotificationPrompt = () => {
+  const [permissionStatus, setPermissionStatus] = useState(null);
+  const {primary} = useThemeStore(state => state);
+
+  useEffect(() => {
+    const getPermissionStatus = async () => {
+      const status = await check(PERMISSIONS.ANDROID.POST_NOTIFICATIONS);
+      setPermissionStatus(status);
+    };
+    getPermissionStatus();
+  }, []);
+
+  const requestPermission = async () => {
+    const result = await request(PERMISSIONS.ANDROID.POST_NOTIFICATIONS);
+    setPermissionStatus(result);
+    if (result !== RESULTS.GRANTED) {
+      Linking.openSettings();
+    }
+  };
+
+  if (permissionStatus === RESULTS.GRANTED || permissionStatus === null) {
+    return null; // Don't show anything if permission is granted or not yet checked
+  }
+
+  return (
+    <View
+      className="bg-[#1A1A1A] rounded-xl overflow-hidden mb-3"
+      style={{
+        marginHorizontal: 20,
+      }}>
+      <TouchableNativeFeedback
+        onPress={requestPermission}
+        background={TouchableNativeFeedback.Ripple('#333333', false)}>
+        <View className="flex-row items-center justify-between p-4">
+          <View className="flex-row items-center">
+            <MaterialIcons
+              name="notifications-none"
+              size={22}
+              color={primary}
+            />
+            <View className="flex-col ml-3">
+              <Text className="text-white text-base">Enable Notifications</Text>
+              <Text className="text-gray-400 text-xs">
+                Receive updates on new content and announcements.
+              </Text>
+            </View>
+          </View>
+          <Feather name="chevron-right" size={20} color="gray" />
+        </View>
+      </TouchableNativeFeedback>
+    </View>
+  );
+};
 
 const Settings = ({navigation}: Props) => {
   const tabNavigation =
@@ -160,44 +216,11 @@ const Settings = ({navigation}: Props) => {
           <View className="mb-6 flex-col gap-3">
             <Text className="text-gray-400 text-sm mb-1">App Mode</Text>
             <View className="bg-[#1A1A1A] rounded-xl overflow-hidden">
-              {/* Vega-Music Mode Switch */}
-              <View className="flex-row items-center justify-between p-4 border-b border-[#262626]">
-                <View className="flex-row items-center">
-                  <MaterialCommunityIcons
-                    name="application"
-                    size={22}
-                    color={primary}
-                  />
-                  <Text className="text-white ml-3 text-base">
-                    Vega-Music Mode
-                  </Text>
-                </View>
-                <Switch
-                  trackColor={{false: '#767577', true: primary}}
-                  thumbColor={appMode === 'music' ? '#f4f3f4' : '#f4f3f4'}
-                  ios_backgroundColor="#3e3e3e"
-                  onValueChange={() => {
-                    const newMode = appMode === 'video' ? 'music' : 'video';
-                    setAppMode(newMode);
-                    if (settingsStorage.isHapticFeedbackEnabled()) {
-                      ReactNativeHapticFeedback.trigger('impactLight', {
-                        enableVibrateFallback: true,
-                        ignoreAndroidSystemSettings: false,
-                      });
-                    }
-                    if (newMode === 'video') {
-                      tabNavigation.navigate('HomeStack');
-                    }
-                  }}
-                  value={appMode === 'music'}
-                />
-              </View>
-
               {/* Vega-TV Mode Switch */}
               <View className="flex-row items-center justify-between p-4">
                 <View className="flex-row items-center">
                   <MaterialCommunityIcons
-                    name="television-play" // New icon for TV
+                    name="television-play"
                     size={22}
                     color={primary}
                   />
@@ -217,8 +240,6 @@ const Settings = ({navigation}: Props) => {
                         ignoreAndroidSystemSettings: false,
                       });
                     }
-                    // Navigate to your new VegaTV screen
-                    // This assumes you have a new 'VegaTVStack' in your navigator
                     tabNavigation.navigate('VegaTVStack');
                   }}
                   value={appMode === 'vegaTv'}
@@ -228,9 +249,15 @@ const Settings = ({navigation}: Props) => {
           </View>
         </AnimatedSection>
 
+        {/* Notification Section */}
+        <AnimatedSection delay={100}>
+          <Text className="text-gray-400 text-sm mb-3 ml-5">Notifications</Text>
+          <NotificationPrompt />
+        </AnimatedSection>
+
         {/* Content provider section (only visible in video mode) */}
         {appMode === 'video' && (
-          <AnimatedSection delay={100}>
+          <AnimatedSection delay={150}>
             <View className="mb-6 flex-col gap-3">
               <Text className="text-gray-400 text-sm mb-1">
                 Content Provider
@@ -431,17 +458,29 @@ const Settings = ({navigation}: Props) => {
                 </View>
               </TouchableNativeFeedback>
 
-              {/* sponsore */}
               <TouchableNativeFeedback
                 onPress={() =>
-                  Linking.openURL('https://github.com/DHR-Store/Vega-Next')
+                  Linking.openURL('https://kreate-that.vercel.app/')
                 }
+                background={TouchableNativeFeedback.Ripple('#333333', false)}>
+                <View className="flex-row items-center justify-between p-4 border-b border-[#262626]">
+                  <View className="flex-row items-center">
+                    <Feather name="music" size={22} color="white" />
+                    <Text className="text-white ml-3 text-base">Kreate</Text>
+                  </View>
+                  <Feather name="external-link" size={20} color="gray" />
+                </View>
+              </TouchableNativeFeedback>
+
+              {/* sponsore */}
+              <TouchableNativeFeedback
+                onPress={() => Linking.openURL('https://dhr-store.vercel.app/')}
                 background={TouchableNativeFeedback.Ripple('#333333', false)}>
                 <View className="flex-row items-center justify-between p-4">
                   <View className="flex-row items-center">
                     <AntDesign name="heart" size={22} color="#ff69b4" />
                     <Text className="text-white ml-3 text-base">
-                      Sponsor Project
+                      Go to DHR-Store
                     </Text>
                   </View>
                   <Feather name="external-link" size={20} color="gray" />

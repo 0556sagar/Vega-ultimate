@@ -11,7 +11,7 @@ import {
   Pressable,
 } from 'react-native';
 import {NativeStackScreenProps} from '@react-navigation/native-stack';
-import {HomeStackParamList} from '../../App'; // Assuming HomeStackParamList is in App.tsx
+import {HomeStackParamList} from '../../App';
 import YoutubeIframe from 'react-native-youtube-iframe';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import useThemeStore from '../../lib/zustand/themeStore';
@@ -27,15 +27,10 @@ import {
   GestureHandlerRootView,
 } from 'react-native-gesture-handler';
 
-// You will need to install these libraries
-// npm install react-native-reanimated react-native-gesture-handler
-// or yarn add react-native-reanimated react-native-gesture-handler
-
 type Props = NativeStackScreenProps<HomeStackParamList, 'WatchTrailer'>;
 
-// Get screen dimensions for responsive video player sizing
 const {width} = Dimensions.get('window');
-const videoHeight = (width / 16) * 9; // Maintain a 16:9 aspect ratio
+const videoHeight = (width / 16) * 9;
 
 const WatchTrailer = ({navigation, route}: Props): React.JSX.Element => {
   const {videoId} = route.params;
@@ -45,34 +40,33 @@ const WatchTrailer = ({navigation, route}: Props): React.JSX.Element => {
   const [isPlaying, setIsPlaying] = useState(true);
   const [videoDuration, setVideoDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
-  const playerRef = useRef(null);
+  const playerRef = useRef<any>(null);
 
-  // Reanimated shared values for UI visibility
   const controlsOpacity = useSharedValue(1);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Hide controls after a few seconds
   const hideControls = useCallback(() => {
     controlsOpacity.value = withTiming(0, {duration: 300});
   }, [controlsOpacity]);
 
-  // Show controls and reset the timer to hide them
   const showControls = useCallback(() => {
     controlsOpacity.value = withTiming(1, {duration: 300});
-  }, [controlsOpacity]);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    if (isPlaying) {
+      timeoutRef.current = setTimeout(hideControls, 3000);
+    }
+  }, [controlsOpacity, hideControls, isPlaying]);
 
   const onStateChange = useCallback(
     (state: string) => {
       if (state === 'playing') {
         setIsLoading(false);
         setIsPlaying(true);
-        // Automatically hide controls after 3 seconds of playing
-        setTimeout(hideControls, 3000);
+        timeoutRef.current = setTimeout(hideControls, 3000);
       } else if (state === 'paused') {
         setIsPlaying(false);
-        showControls();
-      } else if (state === 'error') {
-        setIsError(true);
-        setIsLoading(false);
         showControls();
       } else if (state === 'buffering') {
         setIsLoading(true);
@@ -82,13 +76,15 @@ const WatchTrailer = ({navigation, route}: Props): React.JSX.Element => {
   );
 
   useEffect(() => {
-    if (videoId) {
-      setIsLoading(true);
-      setIsError(false);
-    } else {
+    if (!videoId) {
       setIsLoading(false);
       setIsError(true);
     }
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
   }, [videoId]);
 
   const togglePlayPause = () => {
@@ -113,7 +109,7 @@ const WatchTrailer = ({navigation, route}: Props): React.JSX.Element => {
     }
   }, []);
 
-  const onPlaybackRateChange = useCallback(() => {
+  const onProgress = useCallback(() => {
     if (playerRef.current) {
       playerRef.current.getCurrentTime().then(setCurrentTime);
     }
@@ -148,22 +144,17 @@ const WatchTrailer = ({navigation, route}: Props): React.JSX.Element => {
           backgroundColor="transparent"
         />
         <SafeAreaView style={styles.safeArea}>
-          {/* Absolute positioned header for the back button and title */}
           <Animated.View
             entering={FadeIn.delay(100).duration(500)}
-            style={styles.header}>
+            style={[styles.header, controlsAnimatedStyle]}>
             <TouchableOpacity
               onPress={() => navigation.goBack()}
-              style={[
-                styles.backButton,
-                {backgroundColor: 'rgba(0,0,0,0.5)'},
-              ]}>
+              style={[styles.backButton, {backgroundColor: 'rgba(0,0,0,0.5)'}]}>
               <Ionicons name="arrow-back" size={24} color="white" />
             </TouchableOpacity>
             <Text style={styles.headerTitle}>Trailer</Text>
           </Animated.View>
 
-          {/* Video Player Container */}
           <View style={styles.videoContainer}>
             {videoId && !isError ? (
               <GestureDetector gesture={tapGesture}>
@@ -171,9 +162,7 @@ const WatchTrailer = ({navigation, route}: Props): React.JSX.Element => {
                   {isLoading && (
                     <View style={styles.loadingOverlay}>
                       <ActivityIndicator size="large" color={primary} />
-                      <Text style={styles.loadingText}>
-                        Loading trailer...
-                      </Text>
+                      <Text style={styles.loadingText}>Loading trailer...</Text>
                     </View>
                   )}
                   <Animated.View
@@ -186,7 +175,11 @@ const WatchTrailer = ({navigation, route}: Props): React.JSX.Element => {
                       videoId={videoId}
                       onReady={onReady}
                       onChangeState={onStateChange}
-                      onPlaybackRateChange={onPlaybackRateChange}
+                      onProgress={onProgress}
+                      onError={() => {
+                        setIsError(true);
+                        setIsLoading(false);
+                      }}
                       webViewProps={{
                         androidLayerType: 'hardware',
                       }}
@@ -275,7 +268,6 @@ const WatchTrailer = ({navigation, route}: Props): React.JSX.Element => {
   );
 };
 
-// Stylesheet for a cleaner and more structured approach
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -293,7 +285,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     zIndex: 10,
-    marginTop: 32, // To account for the SafeAreaView and give some space
+    marginTop: 32,
   },
   backButton: {
     padding: 8,

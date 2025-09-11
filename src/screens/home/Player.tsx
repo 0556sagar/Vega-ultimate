@@ -1,3 +1,4 @@
+// Player (2).tsx — UPDATED by Breeze (with right-side hold -> 2x forward)
 import React, {useEffect, useState, useRef, useCallback, useMemo} from 'react';
 import {
   ScrollView,
@@ -8,6 +9,8 @@ import {
   StatusBar,
   Platform,
   TouchableNativeFeedback,
+  Animated as RNAnimated,
+  Pressable,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -60,6 +63,14 @@ const Player = ({route}: Props): React.JSX.Element => {
   // Player ref
   const playerRef: React.RefObject<VideoRef> = useRef(null);
   const hasSetInitialTracksRef = useRef(false);
+
+  // --- NEW: hold-to-2x state & refs ---
+  // Indicates whether user is currently holding the right side (to trigger 2x)
+  const [isHoldingRight, setIsHoldingRight] = useState(false);
+  // Keep previous playback rate to restore after hold ends
+  const previousPlaybackRateRef = useRef<number | null>(null);
+  // Small RN Animated value for indicator fade
+  const holdIndicatorOpacity = useRef(new RNAnimated.Value(0)).current;
 
   // Shared values for animations
   const loadingOpacity = useSharedValue(0);
@@ -498,6 +509,41 @@ const Player = ({route}: Props): React.JSX.Element => {
     });
   }, [showSettings]);
 
+  // --- NEW: Effect to handle hold -> force 2x behavior ---
+  useEffect(() => {
+    // When hold starts: save previous playbackRate and force 2x
+    if (isHoldingRight) {
+      // Save previous if not already saved
+      if (previousPlaybackRateRef.current === null) {
+        previousPlaybackRateRef.current = playbackRate;
+      }
+      // Force 2x
+      setPlaybackRate(2);
+      // show indicator (fade in)
+      RNAnimated.timing(holdIndicatorOpacity, {
+        toValue: 1,
+        duration: 160,
+        useNativeDriver: true,
+      }).start();
+    } else {
+      // When hold ends: restore previous playback rate if available
+      const prev = previousPlaybackRateRef.current;
+      if (prev !== null && prev !== undefined) {
+        setPlaybackRate(prev);
+      } else {
+        // default fallback
+        setPlaybackRate(1.0);
+      }
+      previousPlaybackRateRef.current = null;
+      // hide indicator (fade out)
+      RNAnimated.timing(holdIndicatorOpacity, {
+        toValue: 0,
+        duration: 160,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isHoldingRight, holdIndicatorOpacity, setPlaybackRate, playbackRate]);
+
   // Memoized video player props
   const videoPlayerProps = useMemo(
     () => ({
@@ -809,6 +855,54 @@ const Player = ({route}: Props): React.JSX.Element => {
               </TouchableOpacity>
             )}
         </Animated.View>
+      )}
+
+      {/* --- NEW: Right-side hold overlay (active only when controls are hidden and player not locked) --- */}
+      {!streamLoading && !isPlayerLocked && !showControls && (
+        <View
+          pointerEvents="box-none"
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            right: 0,
+            width: '20%',
+            zIndex: 60,
+          }}>
+          <Pressable
+            onPressIn={() => setIsHoldingRight(true)}
+            onPressOut={() => setIsHoldingRight(false)}
+            style={{flex: 1}}
+            android_ripple={{color: 'transparent'}}
+          />
+        </View>
+      )}
+
+      {/* Hold indicator: small floating '2x' when holding */}
+      {!streamLoading && (
+        <RNAnimated.View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: 30,
+            right: 30,
+            paddingVertical: 6,
+            paddingHorizontal: 10,
+            borderRadius: 8,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            zIndex: 70,
+            opacity: holdIndicatorOpacity,
+            transform: [
+              {
+                scale: holdIndicatorOpacity.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0.9, 1],
+                }),
+              },
+            ],
+          }}>
+          <Text style={{color: 'white', fontWeight: '700'}}>2x</Text>
+        </RNAnimated.View>
       )}
 
       {/* Toast message */}

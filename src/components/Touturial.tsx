@@ -58,7 +58,8 @@ const Tutorial = () => {
       });
     }
 
-    navigation.navigate('TabStack', {
+    // This nested navigation logic is correct
+    navigation.navigate('MainStack', {
       screen: 'SettingsStack',
       params: {
         screen: 'Extensions',

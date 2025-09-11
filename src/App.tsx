@@ -1,5 +1,25 @@
+// App.tsx (full, ready-to-paste)
+// OneSignal integrated, hook-safe, preserves original screens and flows.
+
 import 'react-native-reanimated';
-import React, {useEffect} from 'react';
+import React, {useEffect, useState} from 'react';
+import OneSignal from 'react-native-onesignal';
+import {check, request, PERMISSIONS, RESULTS} from 'react-native-permissions';
+import {
+  View,
+  Text,
+  Modal,
+  TouchableOpacity,
+  Linking,
+  Dimensions,
+  LogBox,
+  ViewStyle,
+  SafeAreaView,
+  Platform,
+  StyleProp,
+} from 'react-native';
+import {MaterialIcons} from '@expo/vector-icons';
+
 import Home from './screens/home/Home';
 import Info from './screens/home/Info';
 import Player from './screens/home/Player';
@@ -25,19 +45,10 @@ import BootSplash from 'react-native-bootsplash';
 import {enableFreeze, enableScreens} from 'react-native-screens';
 import Preferences from './screens/settings/Preference';
 import useThemeStore from './lib/zustand/themeStore';
-import {
-  Dimensions,
-  LogBox,
-  ViewStyle,
-  SafeAreaView,
-  Platform,
-} from 'react-native';
 import {EpisodeLink} from './lib/providers/types';
 import RNReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import TabBarBackgound from './components/TabBarBackgound';
-import {TouchableOpacity} from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
-import {StyleProp} from 'react-native';
 import Animated from 'react-native-reanimated';
 import Downloads from './screens/settings/Downloads';
 import SeriesEpisodes from './screens/settings/SeriesEpisodes';
@@ -58,7 +69,6 @@ import {
   checkAppInstallPermission,
   requestAppInstallPermission,
 } from 'react-native-install-unknown-apps';
-import {Linking} from 'react-native';
 import VegaMusicHome from './screens/music/VegaMusicHome';
 import VegaSettings from './screens/music/VegaSettings';
 import LiveTVScreen from './screens/tv/LiveTVScreen';
@@ -72,6 +82,7 @@ enableFreeze(true);
 
 const isLargeScreen = Dimensions.get('window').width > 768;
 
+/* ----------------- Navigation Types ----------------- */
 export type HomeStackParamList = {
   Home: undefined;
   Info: {link: string; provider?: string; poster?: string};
@@ -185,6 +196,7 @@ export type TabStackParamList = {
   SettingsStack: NavigatorScreenParams<SettingsStackParamList>;
 };
 
+/* ----------------- Create navigators ----------------- */
 const Tab = createBottomTabNavigator<TabStackParamList>();
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const HomeStack = createNativeStackNavigator<HomeStackParamList>();
@@ -198,6 +210,7 @@ const VegaMusicStack = createNativeStackNavigator<VegaMusicStackParamList>();
 const TVRootStack = createNativeStackNavigator<TVRootStackParamList>();
 const VegaTVStack = createNativeStackNavigator<VegaTVStackParamList>();
 
+/* ----------------- Stack screens (unchanged) ----------------- */
 function HomeStackScreen() {
   return (
     <HomeStack.Navigator
@@ -303,6 +316,7 @@ function VegaMusicStackNavigator() {
         animation: 'ios_from_right',
         animationDuration: 200,
         freezeOnBlur: true,
+        contentStyle: {backgroundColor: 'transparent'},
       }}>
       <VegaMusicStack.Screen name="VegaMusicHome" component={VegaMusicHome} />
       <VegaMusicStack.Screen name="VegaSettings" component={VegaSettings} />
@@ -318,6 +332,7 @@ function VegaTVStackNavigator() {
         animation: 'ios_from_right',
         animationDuration: 200,
         freezeOnBlur: true,
+        contentStyle: {backgroundColor: 'transparent'},
       }}>
       <VegaTVStack.Screen name="LiveTVScreen" component={LiveTVScreen} />
       <VegaTVStack.Screen name="TVPlayerScreen" component={TVPlayerScreen} />
@@ -329,6 +344,7 @@ function VegaTVStackNavigator() {
   );
 }
 
+/* ----------------- Tab stack (unchanged logic) ----------------- */
 function TabStackScreen() {
   const {primary} = useThemeStore(state => state);
   const showTabBarLables = settingsStorage.showTabBarLabels();
@@ -424,11 +440,7 @@ function TabStackScreen() {
           title: 'Watch List',
           tabBarIcon: ({focused, color, size}) => (
             <Animated.View style={{transform: [{scale: focused ? 1.1 : 1}]}}>
-              {focused ? (
-                <Entypo name="folder-video" color={color} size={size} />
-              ) : (
-                <Entypo name="folder-video" color={color} size={size} />
-              )}
+              <Entypo name="folder-video" color={color} size={size} />
             </Animated.View>
           ),
         }}
@@ -453,6 +465,7 @@ function TabStackScreen() {
   );
 }
 
+/* ----------------- Music/TV roots ----------------- */
 function MusicRootStackScreen() {
   return (
     <MusicRootStack.Navigator
@@ -486,17 +499,129 @@ function TVRootStackScreen() {
   );
 }
 
+// Notification permission modal component
+const NotificationPromptModal = ({isVisible, onClose, onAllow}) => {
+  return (
+    <Modal
+      animationType="fade"
+      transparent={true}
+      visible={isVisible}
+      onRequestClose={onClose}>
+      <View className="flex-1 justify-center items-center bg-black/50">
+        <View className="bg-[#1A1A1A] rounded-2xl w-80 p-6 items-center">
+          <MaterialIcons
+            name="notifications-active"
+            size={40}
+            color="#6B7280"
+          />
+          <Text className="text-white text-xl font-bold mt-4 text-center">
+            Allow Vega-Next to send you notifications?
+          </Text>
+          <View className="mt-6 w-full">
+            <TouchableOpacity
+              onPress={onAllow}
+              className="bg-[#262626] rounded-xl py-3 px-4 mb-2">
+              <Text className="text-white text-lg text-center font-semibold">
+                Allow
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onClose}
+              className="bg-transparent rounded-xl py-3 px-4">
+              <Text className="text-gray-400 text-lg text-center font-semibold">
+                Don't allow
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+/* ----------------- Main App Component (with OneSignal) ----------------- */
 const App = () => {
   LogBox.ignoreLogs([
     'You have passed a style to FlashList',
     'new NativeEventEmitter()',
   ]);
 
+  // theme & app mode hooks (top-level, stable order)
   const {primary} = useThemeStore(state => state);
   const {appMode} = useAppModeStore(state => state);
+  const [showNotificationModal, setShowNotificationModal] = useState(false);
 
+  // system UI
   SystemUI.setBackgroundColorAsync('black');
 
+  // Notification Permission Logic
+  useEffect(() => {
+    const checkNotificationPermission = async () => {
+      const status = await check(PERMISSIONS.ANDROID.POST_NOTIFICATIONS);
+      if (status === RESULTS.DENIED || status === RESULTS.NOT_DETERMINED) {
+        setShowNotificationModal(true);
+      }
+    };
+    checkNotificationPermission();
+  }, []);
+
+  const handleAllowNotifications = async () => {
+    const result = await request(PERMISSIONS.ANDROID.POST_NOTIFICATIONS);
+    if (result === RESULTS.GRANTED) {
+      setShowNotificationModal(false);
+    }
+  };
+
+  /* ----------------- OneSignal init (top-level, runs once) ----------------- */
+  useEffect(() => {
+    try {
+      // Replace with your actual OneSignal App ID
+      const ONESIGNAL_APP_ID = 'fc34c762-8fbb-45c8-aeb6-b04afbe7c930';
+
+      if (!OneSignal) {
+        console.warn(
+          'OneSignal is undefined. Make sure react-native-onesignal is installed and linked.',
+        );
+        return;
+      }
+
+      // Initialize OneSignal
+      OneSignal.setAppId(ONESIGNAL_APP_ID);
+
+      // Optional: prompt for iOS (no-op on Android)
+      OneSignal.promptForPushNotificationsWithUserResponse(response => {
+        console.log('OneSignal prompt response:', response);
+      });
+
+      // When a notification is received in foreground
+      OneSignal.setNotificationWillShowInForegroundHandler(event => {
+        const notif = event.getNotification();
+
+        // Android ke liye small icon override
+        if (Platform.OS === 'android') {
+          notif.android = {
+            ...notif.android,
+            smallIcon: 'ic_stat_onesignal_default', // drawable folder me exact name, extension mat likho
+          };
+        }
+
+        console.log('OneSignal foreground notification:', notif);
+        event.complete(notif);
+      });
+
+      // When a notification is opened by the user
+      OneSignal.setNotificationOpenedHandler(opened => {
+        console.log('OneSignal notification opened:', opened);
+        // Navigate ya handle data kar sakte ho
+      });
+
+      console.log('OneSignal initialized with app id:', ONESIGNAL_APP_ID);
+    } catch (err) {
+      console.error('OneSignal init error:', err);
+    }
+  }, []); // runs once only
+
+  /* ----------------- Notifee action handler ----------------- */
   async function actionHandler({
     type,
     detail,
@@ -553,6 +678,7 @@ const App = () => {
     };
   }, []);
 
+  /* ----------------- Providers update service ----------------- */
   useEffect(() => {
     updateProvidersService.startAutomaticUpdateCheck();
     return () => {
@@ -560,20 +686,17 @@ const App = () => {
     };
   }, []);
 
+  /* ----------------- Auto update check ----------------- */
   useEffect(() => {
     if (settingsStorage.isAutoCheckUpdateEnabled()) {
       checkForUpdate(() => {}, settingsStorage.isAutoDownloadEnabled(), false);
     }
   }, []);
 
-  // Simple UUID generator as a fallback
+  /* ----------------- UUID & user ping ----------------- */
   const generateUUID = () => {
-    // This is a simple implementation, not a true UUID, but it is unique enough for tracking
-    // You may also consider installing a dedicated library like 'react-native-uuid' if you need a
-    // more robust solution.
-    const S4 = () => {
-      return (((1 + Math.random()) * 0x10000) | 0).toString(16).substring(1);
-    };
+    const S4 = () =>
+      (((1 + Math.random()) * 0x10000) | 0).toString(16).substring(1);
     return (
       S4() +
       S4() +
@@ -590,9 +713,7 @@ const App = () => {
     );
   };
 
-  // Backend API Call for User Tracking
   const sendUserPing = async () => {
-    // Android emulator के लिए, 10.0.2.2 आपके होस्ट मशीन के localhost को refer करता है
     const API_URL = 'http://10.0.2.2:3000/api/user-ping';
     try {
       let userId = null;
@@ -602,21 +723,13 @@ const App = () => {
         userId = await Application.getIosIdForVendorAsync();
       }
 
-      if (!userId) {
-        console.log('Could not get a valid userId. Generating a random UUID.');
-        userId = generateUUID();
-      }
+      if (!userId) userId = generateUUID();
 
-      const pingData = {
-        userId: userId,
-        platform: Platform.OS,
-      };
+      const pingData = {userId, platform: Platform.OS};
 
       await fetch(API_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(pingData),
       });
 
@@ -630,6 +743,18 @@ const App = () => {
     sendUserPing();
   }, []);
 
+  /* ----------------- Choose Main Component hook-safely ----------------- */
+  // Note: appMode comes from a hook above; we must not call hooks conditionally.
+  let MainComponent = TabStackScreen;
+  if (appMode === 'video') {
+    MainComponent = TabStackScreen;
+  } else if (appMode === 'music') {
+    MainComponent = MusicRootStackScreen;
+  } else {
+    MainComponent = TVRootStackScreen;
+  }
+
+  /* ----------------- Render ----------------- */
   return (
     <GlobalErrorBoundary>
       <SafeAreaProvider>
@@ -682,17 +807,8 @@ const App = () => {
                   freezeOnBlur: true,
                   contentStyle: {backgroundColor: 'transparent'},
                 }}>
-                <Stack.Screen name="MainStack">
-                  {() =>
-                    appMode === 'video' ? (
-                      <TabStackScreen />
-                    ) : appMode === 'music' ? (
-                      <MusicRootStackScreen />
-                    ) : (
-                      <TVRootStackScreen />
-                    )
-                  }
-                </Stack.Screen>
+                {/* Use component prop instead of children to keep hooks order stable */}
+                <Stack.Screen name="MainStack" component={MainComponent} />
                 <Stack.Screen
                   name="Player"
                   component={Player}
@@ -701,6 +817,11 @@ const App = () => {
                 <Stack.Screen name="WatchTrailer" component={WebView} />
               </Stack.Navigator>
             </NavigationContainer>
+            <NotificationPromptModal
+              isVisible={showNotificationModal}
+              onClose={() => setShowNotificationModal(false)}
+              onAllow={handleAllowNotifications}
+            />
           </SafeAreaView>
         </QueryClientProvider>
       </SafeAreaProvider>
