@@ -6,8 +6,6 @@ import {
   Dimensions,
   ToastAndroid,
   View,
-  PermissionsAndroid,
-  Platform,
   Linking,
 } from 'react-native';
 import React, {useEffect, useRef} from 'react';
@@ -29,14 +27,7 @@ type Props = {
   setModal: (value: boolean) => void;
   onPressVideo: (item: any) => void;
   onPressSubs: (item: any) => void;
-  /**
-   * @property {boolean} isExternalDownloadMode - If true, downloads will attempt to open in an external browser.
-   * If false, the app will try to handle the download internally (requiring permissions).
-   * This prop should be controlled by your app's settings or preferences.
-   */
-  isExternalDownloadMode: boolean;
 };
-
 const DownloadBottomSheet = ({
   data,
   loading,
@@ -45,88 +36,59 @@ const DownloadBottomSheet = ({
   title,
   onPressSubs,
   onPressVideo,
-  isExternalDownloadMode,
 }: Props) => {
   const bottomSheetRef = useRef<BottomSheet>(null);
   const {primary} = useThemeStore(state => state);
   const [activeTab, setActiveTab] = React.useState<1 | 2>(1);
 
-  const subtitle = data?.map(server => {
-    if (server.subtitles && server.subtitles.length > 0) {
-      return server.subtitles;
-    }
-  });
+  const subtitle = data?.map(server => server.subtitles).filter(Boolean);
 
   useEffect(() => {
-    if (showModal) {
-      bottomSheetRef.current?.expand();
-    } else {
-      bottomSheetRef.current?.close();
-    }
+    if (showModal) bottomSheetRef.current?.expand();
+    else bottomSheetRef.current?.close();
   }, [showModal]);
 
-  /**
-   * Attempts to open a given URL in the device's default web browser.
-   * This is used when `isExternalDownloadMode` is true.
-   * @param {string} url - The URL to open.
-   */
-  const openLinkInBrowser = (url: string) => {
-    Linking.openURL(url).catch(err =>
-      ToastAndroid.show(
-        `Couldn't open URL: ${err.message}`,
-        ToastAndroid.SHORT,
-      ),
+  const handlePressVideo = async (item: Stream) => {
+    const useExternal = settingsStorage.getBool(
+      'alwaysExternalDownloader',
+      false,
     );
+    if (useExternal) {
+      try {
+        await Linking.openURL(item.link);
+      } catch (error) {
+        console.log('Failed to open external link:', error);
+      }
+    } else {
+      onPressVideo(item);
+    }
+    bottomSheetRef.current?.close();
   };
 
-  /**
-   * Handles the download internally using the 'fetch' API.
-   * @param {Stream} item - The stream item to "download".
-   * @param {'video' | 'subtitle'} fileType - The type of file being "downloaded".
-   */
-  const startInternalDownload = async (
-    item: Stream,
-    fileType: 'video' | 'subtitle',
-  ) => {
-    const {link, title: itemTitle, server} = item;
-    try {
-      ToastAndroid.show(
-        `Starting download for ${itemTitle || server}...`,
-        ToastAndroid.SHORT,
-      );
-
-      const response = await fetch(link);
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-
-      // Open the downloaded file in an external app
-      Linking.openURL(objectUrl)
-        .then(() => {
-          ToastAndroid.show(
-            'Download opened in a new window.',
-            ToastAndroid.SHORT,
-          );
-        })
-        .catch(err => {
-          ToastAndroid.show(
-            'Could not open file in another application.',
-            ToastAndroid.SHORT,
-          );
-          console.error('An error occurred opening the file: ', err);
-        });
-    } catch (err) {
-      ToastAndroid.show('Download failed!', ToastAndroid.SHORT);
-      console.error('Download error:', err);
-    } finally {
-      bottomSheetRef.current?.close();
+  const handlePressSubs = async (item: {
+    link: string;
+    type: string;
+    title: string;
+  }) => {
+    const useExternal = settingsStorage.getBool(
+      'alwaysExternalDownloader',
+      false,
+    );
+    if (useExternal) {
+      try {
+        await Linking.openURL(item.link);
+      } catch (error) {
+        console.log('Failed to open subtitle link:', error);
+      }
+    } else {
+      onPressSubs(item);
     }
+    bottomSheetRef.current?.close();
   };
 
   return (
     <Modal
-      onRequestClose={() => {
-        bottomSheetRef.current?.close();
-      }}
+      onRequestClose={() => bottomSheetRef.current?.close()}
       visible={showModal}
       transparent={true}>
       <GestureHandlerRootView>
@@ -134,8 +96,7 @@ const DownloadBottomSheet = ({
           onPress={() => bottomSheetRef.current?.close()}
           className="flex-1">
           <BottomSheet
-            // detached={true}
-            enablePanDownToClose={true}
+            enablePanDownToClose
             snapPoints={['30%', 450]}
             containerStyle={{marginHorizontal: 5}}
             ref={bottomSheetRef}
@@ -185,10 +146,10 @@ const DownloadBottomSheet = ({
                       />
                     ))
                   : activeTab === 1
-                  ? data.map((item, index) => (
+                  ? data.map(item => (
                       <TouchableOpacity
                         className="p-2 bg-white/30 rounded-md my-1"
-                        key={`${item.link}-${index}`}
+                        key={item.link}
                         onLongPress={() => {
                           if (settingsStorage.isHapticFeedbackEnabled()) {
                             RNReactNativeHapticFeedback.trigger('effectTick', {
@@ -199,26 +160,17 @@ const DownloadBottomSheet = ({
                           Clipboard.setString(item.link);
                           ToastAndroid.show('Link copied', ToastAndroid.SHORT);
                         }}
-                        onPress={() => {
-                          // Logic to decide between external and internal "download" for video
-                          if (isExternalDownloadMode) {
-                            // If external download mode is enabled, open the link in a browser
-                            openLinkInBrowser(item.link);
-                          } else {
-                            // Otherwise, trigger the placeholder internal "download"
-                            startInternalDownload(item, 'video');
-                          }
-                        }}>
+                        onPress={() => handlePressVideo(item)}>
                         <Text style={{color: 'white'}}>{item.server}</Text>
                       </TouchableOpacity>
                     ))
                   : subtitle.length > 0
                   ? subtitle.map(
                       subs =>
-                        subs?.map((item, index) => (
+                        subs?.map(item => (
                           <TouchableOpacity
                             className="p-2 bg-white/30 rounded-md my-1"
-                            key={`${item.uri}-${index}`}
+                            key={item.uri}
                             onLongPress={() => {
                               if (settingsStorage.isHapticFeedbackEnabled()) {
                                 RNReactNativeHapticFeedback.trigger(
@@ -235,28 +187,19 @@ const DownloadBottomSheet = ({
                                 ToastAndroid.SHORT,
                               );
                             }}
-                            onPress={() => {
-                              // Logic to decide between external and internal "download" for subtitles
-                              if (isExternalDownloadMode) {
-                                // If external download mode is enabled, open the URI in a browser
-                                openLinkInBrowser(item.uri);
-                              } else {
-                                // Otherwise, prepare subtitle item and trigger the placeholder internal "download"
-                                const subItem = {
-                                  ...item,
-                                  link: item.uri,
-                                  server: 'Subtitles',
-                                  type:
-                                    item.type === TextTrackType.VTT
-                                      ? 'vtt'
-                                      : 'srt',
-                                };
-                                startInternalDownload(subItem, 'subtitle');
-                              }
-                            }}>
+                            onPress={() =>
+                              handlePressSubs({
+                                server: 'Subtitles',
+                                link: item.uri,
+                                type:
+                                  item.type === TextTrackType.VTT
+                                    ? 'vtt'
+                                    : 'srt',
+                                title: item.title,
+                              })
+                            }>
                             <Text style={{color: 'white'}}>
-                              {item.language}
-                              {' - '} {item.title}
+                              {item.language} - {item.title}
                             </Text>
                           </TouchableOpacity>
                         )),

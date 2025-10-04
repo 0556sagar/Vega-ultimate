@@ -1,4 +1,10 @@
-import {View, SafeAreaView, StyleSheet, Linking, TouchableOpacity} from 'react-native';
+import {
+  View,
+  SafeAreaView,
+  StyleSheet,
+  Linking,
+  TouchableOpacity,
+} from 'react-native';
 import React, {useRef, useMemo, useEffect} from 'react';
 import {WebView} from 'react-native-webview';
 import {useRoute, RouteProp, useNavigation} from '@react-navigation/native';
@@ -33,7 +39,8 @@ const WebViewScreen = () => {
   }, []);
 
   // HTML and JavaScript for the YouTube Player. This is memoized to prevent unnecessary re-renders.
-  const customHTML = useMemo(() => `
+  const customHTML = useMemo(
+    () => `
   <!DOCTYPE html>
   <html>
   <head>
@@ -302,7 +309,9 @@ const WebViewScreen = () => {
     <script src="https://www.youtube.com/iframe_api"></script>
   </body>
   </html>
-  `, [videoId, link]);
+  `,
+    [videoId, link],
+  );
 
   const onMessage = (event: any) => {
     try {

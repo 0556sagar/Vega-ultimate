@@ -522,7 +522,7 @@ const Player = ({route}: Props): React.JSX.Element => {
       // show indicator (fade in)
       RNAnimated.timing(holdIndicatorOpacity, {
         toValue: 1,
-        duration: 160,
+        duration: 300,
         useNativeDriver: true,
       }).start();
     } else {

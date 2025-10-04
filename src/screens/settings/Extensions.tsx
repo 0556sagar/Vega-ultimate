@@ -93,14 +93,14 @@ const Extensions = ({navigation}: Props) => {
       isMounted.current = false;
     };
   }, []);
-  
+
   const loadProviders = () => {
     const installed = extensionStorage.getInstalledProviders() || [];
     const available = extensionStorage.getAvailableProviders() || [];
     setInstalledProviders(installed);
     setAvailableProviders(available.filter(item => item && !item.disabled));
   };
-  
+
   const checkForUpdates = async () => {
     try {
       const updates = await updateProvidersService.checkForUpdatesManual();
@@ -128,7 +128,7 @@ const Extensions = ({navigation}: Props) => {
     if (isMounted.current) {
       setUpdatingProvider(provider.value);
     }
-    
+
     try {
       const success = await updateProvidersService.updateProvider(provider);
       if (success && isMounted.current) {
@@ -168,7 +168,7 @@ const Extensions = ({navigation}: Props) => {
     }
     setActiveTab(tab);
   };
-  
+
   const handleInstallProvider = async (provider: ProviderExtension) => {
     if (!provider || !provider.value) {
       Alert.alert('Error', 'Invalid provider data');
@@ -185,7 +185,7 @@ const Extensions = ({navigation}: Props) => {
     if (isMounted.current) {
       setInstallingProvider(provider.value);
     }
-    
+
     try {
       await extensionManager.installProvider(provider);
       if (isMounted.current) {
@@ -213,7 +213,7 @@ const Extensions = ({navigation}: Props) => {
       }
     }
   };
-  
+
   const handleUninstallProvider = (provider: ProviderExtension) => {
     if (!provider || !provider.value) {
       Alert.alert('Error', 'Invalid provider data');
@@ -253,7 +253,7 @@ const Extensions = ({navigation}: Props) => {
       ],
     );
   };
-  
+
   const handleSetActiveProvider = (provider: ProviderExtension) => {
     if (!provider || !provider.value) {
       Alert.alert('Error', 'Invalid provider data');
@@ -268,7 +268,7 @@ const Extensions = ({navigation}: Props) => {
     }
     setActiveExtensionProvider(provider);
   };
-  
+
   const handleRefresh = async () => {
     if (isMounted.current) {
       setRefreshing(true);
@@ -339,13 +339,19 @@ const Extensions = ({navigation}: Props) => {
               );
               if (isMounted.current) {
                 loadProviders();
-                Alert.alert('Success', 'All available providers have been installed!');
+                Alert.alert(
+                  'Success',
+                  'All available providers have been installed!',
+                );
                 setActiveTab('installed');
               }
             } catch (error) {
               console.error('Bulk installation error:', error);
               if (isMounted.current) {
-                Alert.alert('Error', 'Failed to install all providers. Please try again.');
+                Alert.alert(
+                  'Error',
+                  'Failed to install all providers. Please try again.',
+                );
               }
             } finally {
               if (isMounted.current) {

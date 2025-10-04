@@ -457,6 +457,22 @@ const Settings = ({navigation}: Props) => {
                   <Feather name="external-link" size={20} color="gray" />
                 </View>
               </TouchableNativeFeedback>
+              {/*error here*/}
+              <TouchableNativeFeedback
+                onPress={() =>
+                  Linking.openURL('https://radio-nu-five.vercel.app/')
+                }
+                background={TouchableNativeFeedback.Ripple('#333333', false)}>
+                <View className="flex-row items-center justify-between p-4 border-b border-[#262626]">
+                  <View className="flex-row items-center">
+                    <AntDesign name="info" size={22} color={primary} />
+                    <Text className="text-white ml-3 text-base">
+                      Error and Suggestions
+                    </Text>
+                  </View>
+                  <Feather name="external-link" size={20} color="gray" />
+                </View>
+              </TouchableNativeFeedback>
 
               <TouchableNativeFeedback
                 onPress={() =>
