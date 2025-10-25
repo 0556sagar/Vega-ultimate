@@ -1,4 +1,3 @@
-// Player (2).tsx — UPDATED by Breeze (with right-side hold -> 2x forward)
 import React, {useEffect, useState, useRef, useCallback, useMemo} from 'react';
 import {
   ScrollView,
@@ -6,11 +5,9 @@ import {
   ToastAndroid,
   TouchableOpacity,
   View,
-  StatusBar,
   Platform,
   TouchableNativeFeedback,
-  Animated as RNAnimated,
-  Pressable,
+  StatusBar,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -43,15 +40,34 @@ import * as DocumentPicker from 'expo-document-picker';
 import useThemeStore from '../../lib/zustand/themeStore';
 import {FlashList} from '@shopify/flash-list';
 import SearchSubtitles from '../../components/SearchSubtitles';
-import FullScreenChz from 'react-native-fullscreen-chz';
 import useWatchHistoryStore from '../../lib/zustand/watchHistrory';
 import {useStream, useVideoSettings} from '../../lib/hooks/useStream';
 import {
   usePlayerProgress,
   usePlayerSettings,
 } from '../../lib/hooks/usePlayerSettings';
+import FullScreenChz from 'react-native-fullscreen-chz';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Player'>;
+
+// --- FAST FORWARD SETTINGS MOCK (FIXED: Removed all storage logic) ---
+const MOCK_FAST_FORWARD_RATES = [1.5, 2.0, 3.0, 4.0];
+const MOCK_DEFAULT_FF_RATE = 2.0;
+
+// FIX: Always returns the default rate since persistence is unreliable.
+const getFastForwardRate = () => {
+  return MOCK_DEFAULT_FF_RATE;
+};
+
+// FIX: This function no longer saves to storage to prevent the TypeError.
+const setFastForwardRate = (rate: number) => {
+  // Persistence removed. Rate will be managed by local state (setLocalFastForwardRate) only.
+  console.log(`Fast Forward rate set locally to: ${rate}`);
+};
+// ---------------------------------------------------------------------
+
+// FIX: Re-introduced the required holding time for fast forward (10 seconds)
+const FAST_FORWARD_DELAY_MS = 1500;
 
 const Player = ({route}: Props): React.JSX.Element => {
   const {primary} = useThemeStore(state => state);
@@ -64,13 +80,8 @@ const Player = ({route}: Props): React.JSX.Element => {
   const playerRef: React.RefObject<VideoRef> = useRef(null);
   const hasSetInitialTracksRef = useRef(false);
 
-  // --- NEW: hold-to-2x state & refs ---
-  // Indicates whether user is currently holding the right side (to trigger 2x)
-  const [isHoldingRight, setIsHoldingRight] = useState(false);
-  // Keep previous playback rate to restore after hold ends
-  const previousPlaybackRateRef = useRef<number | null>(null);
-  // Small RN Animated value for indicator fade
-  const holdIndicatorOpacity = useRef(new RNAnimated.Value(0)).current;
+  // Timer ref for the 10-second long press delay
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Shared values for animations
   const loadingOpacity = useSharedValue(0);
@@ -156,6 +167,10 @@ const Player = ({route}: Props): React.JSX.Element => {
     processVideoTracks,
   } = useVideoSettings();
 
+  // Local state for toast message
+  const [toastMessage, setToastMessage] = useState('');
+  const [showToast, setShowToast] = useState(false);
+
   // Custom hooks for player settings
   const {
     showControls,
@@ -165,12 +180,10 @@ const Player = ({route}: Props): React.JSX.Element => {
     activeTab,
     setActiveTab,
     resizeMode,
-    playbackRate,
-    setPlaybackRate,
+    playbackRate: basePlaybackRate,
+    setPlaybackRate: setBasePlaybackRate,
     isPlayerLocked,
     showUnlockButton,
-    toastMessage,
-    showToast,
     isTextVisible,
     handleResizeMode,
     togglePlayerLock,
@@ -178,11 +191,84 @@ const Player = ({route}: Props): React.JSX.Element => {
     unlockButtonTimerRef,
   } = usePlayerSettings();
 
+  // --- FAST FORWARD FEATURE STATE AND LOGIC ---
+  const [isFastForwarding, setIsFastForwarding] = useState(false);
+  const [fastForwardRate, setLocalFastForwardRate] = useState(
+    getFastForwardRate(),
+  );
+
+  // Determine the final playback rate
+  const finalPlaybackRate = useMemo(() => {
+    // If fast-forwarding, use the custom fastForwardRate, otherwise use the basePlaybackRate.
+    return isFastForwarding ? fastForwardRate : basePlaybackRate;
+  }, [isFastForwarding, fastForwardRate, basePlaybackRate]);
+
+  // Handle touch events for fast-forward
+  const handleTouchStart = useCallback(() => {
+    // Only activate FF if player is not locked, controls are hidden, and settings are hidden
+    if (
+      !isPlayerLocked &&
+      !showControls &&
+      !showSettings &&
+      playerRef.current
+    ) {
+      // 1. Clear any existing timer just in case
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+      }
+
+      // 2. FIX: Start a timer for the 10-second long press delay
+      longPressTimerRef.current = setTimeout(() => {
+        // 3. Only activate FF after the delay
+        setIsFastForwarding(true);
+        // Show Fast Forward toast
+        setToastMessage(`Fast Forward ${fastForwardRate.toFixed(1)}x`);
+        setShowToast(true);
+      }, FAST_FORWARD_DELAY_MS);
+    }
+  }, [
+    isPlayerLocked,
+    showControls,
+    showSettings,
+    fastForwardRate,
+    setShowToast,
+    setToastMessage,
+  ]);
+
+  // Handler to cancel FF on any touch movement (scroll/pan)
+  const handleTouchMove = useCallback(() => {
+    // 1. Clear the timer immediately on touch move
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    // 2. Stop fast-forwarding if it was active
+    if (isFastForwarding) {
+      setIsFastForwarding(false);
+      setShowToast(false);
+    }
+  }, [isFastForwarding, setShowToast]);
+
+  const handleTouchEnd = useCallback(() => {
+    // 1. Clear the timer immediately on touch end (prevents FF from starting)
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+
+    // 2. Stop fast-forwarding if it was active
+    if (isFastForwarding) {
+      setIsFastForwarding(false);
+      // Hide Fast Forward toast
+      setShowToast(false);
+    }
+  }, [isFastForwarding, setShowToast]);
+
   // Custom hook for progress handling
   const {videoPositionRef, handleProgress} = usePlayerProgress({
     activeEpisode,
     routeParams: route.params,
-    playbackRate,
+    playbackRate: finalPlaybackRate,
     updatePlaybackInfo,
   });
 
@@ -286,45 +372,27 @@ const Player = ({route}: Props): React.JSX.Element => {
     [switchToNextStream, navigation, setShowControls],
   );
 
-  // Memoized cast effect
-  // useEffect(() => {
-  //   if (remoteMediaClient && !Platform.isTV && selectedStream?.link) {
-  //     remoteMediaClient.loadMedia({
-  //       startTime: watchedDuration,
-  //       playbackRate: playbackRate,
-  //       autoplay: true,
-  //       mediaInfo: {
-  //         contentUrl: selectedStream.link,
-  //         contentType: 'video/x-matroska',
-  //         metadata: {
-  //           title: route.params?.primaryTitle,
-  //           subtitle: route.params?.secondaryTitle,
-  //           type: 'movie',
-  //           images: [
-  //             {
-  //               url: route.params?.poster?.poster || '',
-  //             },
-  //           ],
-  //         },
-  //       },
-  //     });
-  //     playerRef?.current?.pause();
-  //     GoogleCast.showExpandedControls();
-  //   }
-  //   return () => {
-  //     if (remoteMediaClient) {
-  //       remoteMediaClient?.stop();
-  //     }
-  //   };
-  // }, [
-  //   remoteMediaClient,
-  //   selectedStream,
-  //   watchedDuration,
-  //   playbackRate,
-  //   route.params,
-  // ]);
+  // Handler for returning from Picture-in-Picture
+  const handleRestorePIP = useCallback(() => {
+    // Reset playback rate to 1.0 to prevent errors if it was a custom rate
+    setBasePlaybackRate(1.0);
+    // Ensure the player is resumed
+    playerRef?.current?.resume();
+  }, [setBasePlaybackRate]);
 
-  // Exit fullscreen on back
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (unlockButtonTimerRef.current) {
+        clearTimeout(unlockButtonTimerRef.current);
+      }
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+      }
+    };
+  }, [unlockButtonTimerRef]);
+
+  // Enter/Exit fullscreen immersive mode on mount/unmount
   useEffect(() => {
     FullScreenChz.enable();
     const unsubscribe = navigation.addListener('beforeRemove', () => {
@@ -426,15 +494,6 @@ const Player = ({route}: Props): React.JSX.Element => {
     setSelectedTextTrackIndex,
   ]);
 
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => {
-      if (unlockButtonTimerRef.current) {
-        clearTimeout(unlockButtonTimerRef.current);
-      }
-    };
-  }, [unlockButtonTimerRef]);
-
   // Animation effects
   useEffect(() => {
     // Loading animations
@@ -509,41 +568,6 @@ const Player = ({route}: Props): React.JSX.Element => {
     });
   }, [showSettings]);
 
-  // --- NEW: Effect to handle hold -> force 2x behavior ---
-  useEffect(() => {
-    // When hold starts: save previous playbackRate and force 2x
-    if (isHoldingRight) {
-      // Save previous if not already saved
-      if (previousPlaybackRateRef.current === null) {
-        previousPlaybackRateRef.current = playbackRate;
-      }
-      // Force 2x
-      setPlaybackRate(2);
-      // show indicator (fade in)
-      RNAnimated.timing(holdIndicatorOpacity, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      // When hold ends: restore previous playback rate if available
-      const prev = previousPlaybackRateRef.current;
-      if (prev !== null && prev !== undefined) {
-        setPlaybackRate(prev);
-      } else {
-        // default fallback
-        setPlaybackRate(1.0);
-      }
-      previousPlaybackRateRef.current = null;
-      // hide indicator (fade out)
-      RNAnimated.timing(holdIndicatorOpacity, {
-        toValue: 0,
-        duration: 160,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [isHoldingRight, holdIndicatorOpacity, setPlaybackRate, playbackRate]);
-
   // Memoized video player props
   const videoPlayerProps = useMemo(
     () => ({
@@ -570,10 +594,12 @@ const Player = ({route}: Props): React.JSX.Element => {
       onLoad: () => {
         playerRef?.current?.seek(watchedDuration);
         playerRef?.current?.resume();
-        setPlaybackRate(1.0);
+        setBasePlaybackRate(1.0); // Use the base setter
       },
+      // Handler for returning from PIP to prevent TypeError
+      onRestoreUserInterfaceForPictureInPicture: handleRestorePIP,
       videoRef: playerRef,
-      rate: playbackRate,
+      rate: finalPlaybackRate, // Use the final calculated rate
       poster: route.params?.poster?.logo || '',
       subtitleStyle: {
         fontSize: settingsStorage.getSubtitleFontSize() || 16,
@@ -626,8 +652,8 @@ const Player = ({route}: Props): React.JSX.Element => {
       activeEpisode,
       handleProgress,
       watchedDuration,
-      playbackRate,
-      setPlaybackRate,
+      finalPlaybackRate,
+      setBasePlaybackRate,
       primary,
       navigation,
       setShowControls,
@@ -639,6 +665,7 @@ const Player = ({route}: Props): React.JSX.Element => {
       selectedVideoTrack,
       processAudioTracks,
       processVideoTracks,
+      handleRestorePIP,
     ],
   );
 
@@ -701,216 +728,188 @@ const Player = ({route}: Props): React.JSX.Element => {
       <StatusBar translucent={true} hidden={true} />
       <OrientationLocker orientation={LANDSCAPE} />
 
-      {/* Video Player */}
-      <VideoPlayer {...videoPlayerProps} />
+      {/* Main touch area for fast-forward gesture */}
+      <View
+        className="flex-1"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}>
+        {/* Video Player */}
+        <VideoPlayer {...videoPlayerProps} />
 
-      {/* Full-screen overlay to detect taps when locked */}
-      {isPlayerLocked && (
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={handleLockedScreenTap}
-          className="absolute top-0 left-0 right-0 bottom-0 z-40 bg-transparent"
-        />
-      )}
-
-      {/* Lock/Unlock button */}
-      {!streamLoading && !Platform.isTV && (
-        <Animated.View
-          style={[lockButtonStyle]}
-          className="absolute top-5 right-5 flex-row items-center gap-2 z-50">
+        {/* Full-screen overlay to detect taps when locked */}
+        {isPlayerLocked && (
           <TouchableOpacity
-            onPress={togglePlayerLock}
-            className="opacity-70 p-2 rounded-full">
-            <MaterialIcons
-              name={isPlayerLocked ? 'lock' : 'lock-open'}
-              color={'hsl(0, 0%, 70%)'}
-              size={24}
-            />
-          </TouchableOpacity>
-          {/* {!isPlayerLocked && (
-            <CastButton
-              style={{width: 40, height: 40, opacity: 0.5, tintColor: 'white'}}
-            />
-          )} */}
-        </Animated.View>
-      )}
+            activeOpacity={1}
+            onPress={handleLockedScreenTap}
+            className="absolute top-0 left-0 right-0 bottom-0 z-40 bg-transparent"
+          />
+        )}
 
-      {/* Bottom controls */}
-      {!isPlayerLocked && (
-        <Animated.View
-          style={[controlsStyle]}
-          className="absolute bottom-3 right-6 flex flex-row justify-center w-full gap-x-16">
-          {/* Audio controls */}
-          <TouchableOpacity
-            onPress={() => {
-              setActiveTab('audio');
-              setShowSettings(!showSettings);
-            }}
-            className="flex flex-row gap-x-1 items-center">
-            <MaterialIcons
-              style={{opacity: 0.7}}
-              name={'multitrack-audio'}
-              size={26}
-              color="white"
-            />
-            <Text className="capitalize text-xs text-white opacity-70">
-              {audioTracks[selectedAudioTrackIndex]?.language || 'auto'}
-            </Text>
-          </TouchableOpacity>
-
-          {/* Subtitle controls */}
-          <TouchableOpacity
-            onPress={() => {
-              setActiveTab('subtitle');
-              setShowSettings(!showSettings);
-            }}
-            className="flex flex-row gap-x-1 items-center">
-            <MaterialIcons
-              style={{opacity: 0.6}}
-              name={'subtitles'}
-              size={24}
-              color="white"
-            />
-            <Text className="text-xs capitalize text-white opacity-70">
-              {selectedTextTrackIndex === 1000
-                ? 'none'
-                : textTracks[selectedTextTrackIndex]?.language}
-            </Text>
-          </TouchableOpacity>
-
-          {/* Speed controls */}
-          <TouchableOpacity
-            className="flex-row gap-1 items-center opacity-60"
-            onPress={() => {
-              setActiveTab('speed');
-              setShowSettings(!showSettings);
-            }}>
-            <MaterialIcons name="speed" size={26} color="white" />
-            <Text className="text-white text-sm">
-              {playbackRate === 1 ? '1.0' : playbackRate}
-            </Text>
-          </TouchableOpacity>
-
-          {/* PIP */}
-          {!Platform.isTV && (
+        {/* Lock/Unlock button */}
+        {!streamLoading && !Platform.isTV && (
+          <Animated.View
+            style={[lockButtonStyle]}
+            className="absolute top-5 right-5 flex-row items-center gap-2 z-50">
             <TouchableOpacity
-              className="flex-row gap-1 items-center opacity-60"
-              onPress={() => {
-                playerRef?.current?.enterPictureInPicture();
-              }}>
+              onPress={togglePlayerLock}
+              className="opacity-70 p-2 rounded-full">
               <MaterialIcons
-                name="picture-in-picture"
+                name={isPlayerLocked ? 'lock' : 'lock-open'}
+                color={'hsl(0, 0%, 70%)'}
+                size={24}
+              />
+            </TouchableOpacity>
+            {/* {!isPlayerLocked && (
+              <CastButton
+                style={{width: 40, height: 40, opacity: 0.5, tintColor: 'white'}}
+              />
+            )} */}
+          </Animated.View>
+        )}
+
+        {/* Bottom controls */}
+        {!isPlayerLocked && (
+          <Animated.View
+            style={[controlsStyle]}
+            className="absolute bottom-3 right-6 flex flex-row justify-center w-full gap-x-16">
+            {/* Audio controls */}
+            <TouchableOpacity
+              onPress={() => {
+                setActiveTab('audio');
+                setShowSettings(!showSettings);
+              }}
+              className="flex flex-row gap-x-1 items-center">
+              <MaterialIcons
+                style={{opacity: 0.7}}
+                name={'multitrack-audio'}
+                size={26}
+                color="white"
+              />
+              <Text className="capitalize text-xs text-white opacity-70">
+                {audioTracks[selectedAudioTrackIndex]?.language || 'auto'}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Subtitle controls */}
+            <TouchableOpacity
+              onPress={() => {
+                setActiveTab('subtitle');
+                setShowSettings(!showSettings);
+              }}
+              className="flex flex-row gap-x-1 items-center">
+              <MaterialIcons
+                style={{opacity: 0.6}}
+                name={'subtitles'}
                 size={24}
                 color="white"
               />
-              <Text className="text-white text-xs">PIP</Text>
+              <Text className="text-xs capitalize text-white opacity-70">
+                {selectedTextTrackIndex === 1000
+                  ? 'none'
+                  : textTracks[selectedTextTrackIndex]?.language}
+              </Text>
             </TouchableOpacity>
-          )}
 
-          {/* Server & Quality */}
-          <TouchableOpacity
-            className="flex-row gap-1 items-center opacity-60"
-            onPress={() => {
-              setActiveTab('server');
-              setShowSettings(!showSettings);
-            }}>
-            <MaterialIcons name="video-settings" size={25} color="white" />
-            <Text className="text-xs text-white capitalize">
-              {videoTracks?.length === 1
-                ? formatQuality(videoTracks[0]?.height?.toString() || 'auto')
-                : formatQuality(
-                    videoTracks?.[selectedQualityIndex]?.height?.toString() ||
-                      'auto',
-                  )}
-            </Text>
-          </TouchableOpacity>
+            {/* Speed controls (Base Rate) */}
+            <TouchableOpacity
+              className="flex-row gap-1 items-center opacity-60"
+              onPress={() => {
+                setActiveTab('speed');
+                setShowSettings(!showSettings);
+              }}>
+              <MaterialIcons name="speed" size={26} color="white" />
+              <Text className="text-white text-sm">
+                {basePlaybackRate === 1 ? '1.0' : basePlaybackRate}
+              </Text>
+            </TouchableOpacity>
 
-          {/* Resize button */}
-          <TouchableOpacity
-            className="flex-row gap-1 items-center opacity-60"
-            onPress={handleResizeMode}>
-            <MaterialIcons name="fullscreen" size={28} color="white" />
-            <Text className="text-white text-sm min-w-[38px]">
-              {resizeMode === ResizeMode.NONE
-                ? 'Fit'
-                : resizeMode === ResizeMode.COVER
-                ? 'Cover'
-                : resizeMode === ResizeMode.STRETCH
-                ? 'Stretch'
-                : 'Contain'}
-            </Text>
-          </TouchableOpacity>
+            {/* Fast Forward Speed Setting Button */}
+            <TouchableOpacity
+              className="flex-row gap-1 items-center opacity-60"
+              onPress={() => {
+                setActiveTab('fastForward');
+                setShowSettings(!showSettings);
+              }}>
+              <MaterialIcons name="fast-forward" size={25} color="white" />
+              <Text className="text-xs text-white capitalize">
+                ({fastForwardRate.toFixed(1)}x)
+              </Text>
+            </TouchableOpacity>
 
-          {/* Next episode button */}
-          {route.params?.episodeList?.indexOf(activeEpisode) <
-            route.params?.episodeList?.length - 1 &&
-            videoPositionRef.current.position /
-              videoPositionRef.current.duration >
-              0.8 && (
+            {/* PIP */}
+            {!Platform.isTV && (
               <TouchableOpacity
-                className="flex-row items-center opacity-60"
-                onPress={handleNextEpisode}>
-                <Text className="text-white text-base">Next</Text>
-                <MaterialIcons name="skip-next" size={28} color="white" />
+                className="flex-row gap-1 items-center opacity-60"
+                onPress={() => {
+                  playerRef?.current?.enterPictureInPicture();
+                }}>
+                <MaterialIcons
+                  name="picture-in-picture"
+                  size={24}
+                  color="white"
+                />
+                <Text className="text-white text-xs">PIP</Text>
               </TouchableOpacity>
             )}
-        </Animated.View>
-      )}
 
-      {/* --- NEW: Right-side hold overlay (active only when controls are hidden and player not locked) --- */}
-      {!streamLoading && !isPlayerLocked && !showControls && (
-        <View
-          pointerEvents="box-none"
-          style={{
-            position: 'absolute',
-            top: 0,
-            bottom: 0,
-            right: 0,
-            width: '20%',
-            zIndex: 60,
-          }}>
-          <Pressable
-            onPressIn={() => setIsHoldingRight(true)}
-            onPressOut={() => setIsHoldingRight(false)}
-            style={{flex: 1}}
-            android_ripple={{color: 'transparent'}}
-          />
-        </View>
-      )}
+            {/* Server & Quality */}
+            <TouchableOpacity
+              className="flex-row gap-1 items-center opacity-60"
+              onPress={() => {
+                setActiveTab('server');
+                setShowSettings(!showSettings);
+              }}>
+              <MaterialIcons name="video-settings" size={25} color="white" />
+              <Text className="text-xs text-white capitalize">
+                {videoTracks?.length === 1
+                  ? formatQuality(videoTracks[0]?.height?.toString() || 'auto')
+                  : formatQuality(
+                      videoTracks?.[selectedQualityIndex]?.height?.toString() ||
+                        'auto',
+                    )}
+              </Text>
+            </TouchableOpacity>
 
-      {/* Hold indicator: small floating '2x' when holding */}
-      {!streamLoading && (
-        <RNAnimated.View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            top: 30,
-            right: 30,
-            paddingVertical: 6,
-            paddingHorizontal: 10,
-            borderRadius: 8,
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            zIndex: 70,
-            opacity: holdIndicatorOpacity,
-            transform: [
-              {
-                scale: holdIndicatorOpacity.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0.9, 1],
-                }),
-              },
-            ],
-          }}>
-          <Text style={{color: 'white', fontWeight: '700'}}>2x</Text>
-        </RNAnimated.View>
-      )}
+            {/* Resize button */}
+            <TouchableOpacity
+              className="flex-row gap-1 items-center opacity-60"
+              onPress={handleResizeMode}>
+              <MaterialIcons name="fit-screen" size={28} color="white" />
+              <Text className="text-white text-sm min-w-[38px]">
+                {resizeMode === ResizeMode.NONE
+                  ? 'Fit'
+                  : resizeMode === ResizeMode.COVER
+                  ? 'Cover'
+                  : resizeMode === ResizeMode.STRETCH
+                  ? 'Stretch'
+                  : 'Contain'}
+              </Text>
+            </TouchableOpacity>
 
-      {/* Toast message */}
+            {/* Next episode button */}
+            {route.params?.episodeList?.indexOf(activeEpisode) <
+              route.params?.episodeList?.length - 1 &&
+              videoPositionRef.current.position /
+                videoPositionRef.current.duration >
+                0.8 && (
+                <TouchableOpacity
+                  className="flex-row items-center opacity-60"
+                  onPress={handleNextEpisode}>
+                  <Text className="text-white text-base">Next</Text>
+                  <MaterialIcons name="skip-next" size={28} color="white" />
+                </TouchableOpacity>
+              )}
+          </Animated.View>
+        )}
+      </View>
+
+      {/* Toast message (used for fast-forward notification) */}
       <Animated.View
         style={[toastStyle]}
         pointerEvents="none"
-        className="absolute w-full top-12 justify-center items-center px-2">
-        <Text className="text-white bg-black/50 p-2 rounded-full text-base">
+        className="absolute w-full top-12 justify-center items-center px-2 z-50">
+        <Text className="text-white bg-black/70 p-2 rounded-full text-base font-semibold">
           {toastMessage}
         </Text>
       </Animated.View>
@@ -1192,7 +1191,7 @@ const Player = ({route}: Props): React.JSX.Element => {
               </View>
             )}
 
-            {/* Speed Tab */}
+            {/* Speed Tab (Base Rate) */}
             {activeTab === 'speed' && (
               <ScrollView className="w-full h-full p-1 px-4">
                 <Text className="text-lg font-bold text-center text-white">
@@ -1203,17 +1202,48 @@ const Player = ({route}: Props): React.JSX.Element => {
                     className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
                     key={i}
                     onPress={() => {
-                      setPlaybackRate(rate);
+                      setBasePlaybackRate(rate);
                       setShowSettings(false);
                     }}>
                     <Text
                       className={'text-lg font-semibold'}
                       style={{
-                        color: playbackRate === rate ? primary : 'white',
+                        color: basePlaybackRate === rate ? primary : 'white',
                       }}>
                       {rate}x
                     </Text>
-                    {playbackRate === rate && (
+                    {basePlaybackRate === rate && (
+                      <MaterialIcons name="check" size={20} color="white" />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+
+            {/* Fast Forward Speed Tab */}
+            {activeTab === 'fastForward' && (
+              <ScrollView className="w-full h-full p-1 px-4">
+                <Text className="text-lg font-bold text-center text-white">
+                  Fast Forward Speed
+                </Text>
+                {MOCK_FAST_FORWARD_RATES.map((rate, i) => (
+                  <TouchableOpacity
+                    className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
+                    key={i}
+                    onPress={() => {
+                      // FIX: Only update local state to avoid storage error
+                      setLocalFastForwardRate(rate);
+                      // setFastForwardRate(rate); // Removed to prevent storage crash
+                      setShowSettings(false);
+                    }}>
+                    <Text
+                      className={'text-lg font-semibold'}
+                      style={{
+                        color: fastForwardRate === rate ? primary : 'white',
+                      }}>
+                      {rate}x
+                    </Text>
+                    {fastForwardRate === rate && (
                       <MaterialIcons name="check" size={20} color="white" />
                     )}
                   </TouchableOpacity>

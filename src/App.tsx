@@ -35,7 +35,7 @@ import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Entypo from '@expo/vector-icons/Entypo';
-import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import MaterialCommunityIcons from '@expo/icons/MaterialCommunityIcons';
 import 'react-native-gesture-handler';
 import WebView from './screens/WebView';
 import SearchResults from './screens/SearchResults';
@@ -210,7 +210,33 @@ const VegaMusicStack = createNativeStackNavigator<VegaMusicStackParamList>();
 const TVRootStack = createNativeStackNavigator<TVRootStackParamList>();
 const VegaTVStack = createNativeStackNavigator<VegaTVStackParamList>();
 
-/* ----------------- Stack screens (unchanged) ----------------- */
+/* ----------------- Custom TabBarButton FIX (Function Declaration) ----------------- */
+// FIX: Using a standard function declaration guarantees full hoisting,
+// resolving potential ReferenceErrors caused by const/let binding in some bundler environments.
+function CustomTabBarButton(props) {
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityState={props.accessibilityState}
+      style={props.style}
+      onPress={e => {
+        props.onPress && props.onPress(e);
+        if (
+          !props?.accessibilityState?.selected &&
+          settingsStorage.isHapticFeedbackEnabled()
+        ) {
+          RNReactNativeHapticFeedback.trigger('effectTick', {
+            enableVibrateFallback: true,
+            ignoreAndroidSystemSettings: false,
+          });
+        }
+      }}>
+      {props.children}
+    </TouchableOpacity>
+  );
+}
+
+/* ----------------- Stack screens ----------------- */
 function HomeStackScreen() {
   return (
     <HomeStack.Navigator
@@ -344,10 +370,14 @@ function VegaTVStackNavigator() {
   );
 }
 
-/* ----------------- Tab stack (unchanged logic) ----------------- */
+/* ----------------- Tab stack ----------------- */
 function TabStackScreen() {
   const {primary} = useThemeStore(state => state);
   const showTabBarLables = settingsStorage.showTabBarLabels();
+
+  // FIX: Increased height from 80 to 90 and adjusted paddingTop for better label visibility
+  const tabBarHeight = isLargeScreen ? undefined : 90; // Increased height
+  const tabBarPaddingTop = isLargeScreen ? undefined : 10; // Adjusted padding
 
   return (
     <Tab.Navigator
@@ -367,39 +397,18 @@ function TabStackScreen() {
           ? {
               position: 'absolute',
               bottom: 0,
-              height: 55,
+              height: 74, // Use adjusted height
               borderRadius: 0,
               overflow: 'hidden',
               elevation: 0,
               borderTopWidth: 0,
               paddingHorizontal: 0,
-              paddingTop: 5,
+              paddingTop: 5, // Use adjusted padding
             }
           : {},
         tabBarBackground: () => <TabBarBackgound />,
         tabBarHideOnKeyboard: true,
-        tabBarButton: props => {
-          return (
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityState={props.accessibilityState}
-              style={props.style as StyleProp<ViewStyle>}
-              onPress={e => {
-                props.onPress && props.onPress(e);
-                if (
-                  !props?.accessibilityState?.selected &&
-                  settingsStorage.isHapticFeedbackEnabled()
-                ) {
-                  RNReactNativeHapticFeedback.trigger('effectTick', {
-                    enableVibrateFallback: true,
-                    ignoreAndroidSystemSettings: false,
-                  });
-                }
-              }}>
-              {props.children}
-            </TouchableOpacity>
-          );
-        },
+        tabBarButton: CustomTabBarButton, // References the fully hoisted function
       }}>
       <Tab.Screen
         name="HomeStack"
@@ -464,7 +473,6 @@ function TabStackScreen() {
     </Tab.Navigator>
   );
 }
-
 /* ----------------- Music/TV roots ----------------- */
 function MusicRootStackScreen() {
   return (

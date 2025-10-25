@@ -3,12 +3,12 @@ import requestStoragePermission from '../../lib/file/getStoragePermission';
 import * as FileSystem from 'expo-file-system';
 import {downloadFolder} from '../../lib/constants';
 import * as VideoThumbnails from 'expo-video-thumbnails';
-import React, {useState, useEffect} from 'react';
+import React, {useState, useEffect, useCallback} from 'react';
 import {settingsStorage, downloadsStorage} from '../../lib/storage';
 import useThemeStore from '../../lib/zustand/themeStore';
 import * as RNFS from '@dr.pogodin/react-native-fs';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import {useNavigation} from '@react-navigation/native';
+import {useNavigation, useFocusEffect} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {RootStackParamList} from '../../App';
 import RNReactNativeHapticFeedback from 'react-native-haptic-feedback';
@@ -31,67 +31,51 @@ const isVideoFile = (filename: string): boolean => {
   return VIDEO_EXTENSIONS.includes(extension);
 };
 
-// Add this interface after the existing imports
-interface MediaGroup {
-  title: string;
-  episodes: FileSystem.FileInfo[];
-  thumbnail?: string;
-  isMovie: boolean;
+// Interface for a single file item (used in FlashList data)
+interface MediaItem extends FileSystem.FileInfo {
+  title: string; // Title extracted from filename
 }
 
-const normalizeString = (str: string): string => {
-  return str
-    .toLowerCase()
-    .replace(/[\s.-]+/g, ' ') // normalize spaces, dots, and hyphens
-    .replace(/[^\w\s]/g, '') // remove special characters
-    .trim();
+// Function to extract a readable title from the filename
+const getReadableTitle = (fileName: string): string => {
+  let title = fileName;
+
+  // 1. Remove Extension
+  title = title.replace(/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v)$/i, '');
+
+  // 2. Replace common separators with spaces
+  title = title.replace(/[\._-]/g, ' ').replace(/\s{2,}/g, ' ');
+
+  // 3. Trim extra whitespace
+  return title.trim();
 };
 
-const getBaseName = (fileName: string): string => {
-  let baseName = fileName
-    .replace(/\.(mp4|mkv|avi|mov)$/i, '') // remove extension
-    .replace(/(?:480p|720p|1080p|2160p|HEVC|x264|BluRay|WEB-DL|HDRip).*$/i, '') // remove quality tags
-    .replace(/\[.*?\]/g, '') // remove bracketed text
-    .replace(/\(.*?\)/g, '') // remove parenthesized text
-    .replace(/(?:episode|ep)[\s-]*\d+/gi, '') // remove episode indicators
-    .replace(/s\d{1,2}e\d{1,2}/gi, '') // remove SxxExx format
-    .replace(/season[\s-]*\d+/gi, '') // remove season indicators
-    .replace(/\s*-\s*\d+/, '') // remove trailing numbers
-    .replace(/\s*\d+\s*$/, '') // remove ending numbers
-    .trim();
-
-  // Remove any remaining numbers at the end that might be episode numbers
-  baseName = baseName.replace(/[\s.-]*\d+$/, '');
-
-  return baseName;
-};
-
+// Function to get episode/season information (reintroduced)
 const getEpisodeInfo = (
   fileName: string,
 ): {season: number; episode: number} => {
-  // Try to match SxxExx format first
-  let match = fileName.match(/s(\d{1,2})e(\d{1,2})/i);
+  // Try SxxExx
+  let match = fileName.match(/s(\d{1,3})e(\d{1,3})/i);
   if (match) {
     return {season: parseInt(match[1], 10), episode: parseInt(match[2], 10)};
   }
 
-  // Try to match "Season X Episode Y" format
-  match = fileName.match(/season[\s.-]*(\d{1,2}).*?episode[\s.-]*(\d{1,2})/i);
+  // Try "Episode Y" or "Ep Y"
+  match = fileName.match(/(?:episode|ep)[\s._-]*(\d{1,3})/i);
   if (match) {
-    return {season: parseInt(match[1], 10), episode: parseInt(match[2], 10)};
+    let seasonMatch = fileName.match(/season[\s._-]*(\d{1,3})/i);
+    const season = seasonMatch ? parseInt(seasonMatch[1], 10) : 1;
+    return {season, episode: parseInt(match[1], 10)};
   }
 
-  // Try to match episode number only
-  match =
-    fileName.match(/(?:episode|ep)[\s.-]*(\d{1,2})/i) ||
-    fileName.match(/[\s.-](\d{1,2})(?:\s*$|\s*\.)/);
-
+  // Try finding a number at the end, often used for single-digit episode
+  match = fileName.match(/[\s._-](\d{1,3})[\s._-]*$/);
   if (match) {
     return {season: 1, episode: parseInt(match[1], 10)};
   }
 
   // Default case
-  return {season: 1, episode: 0};
+  return {season: 0, episode: 0}; // Use 0 for "not an episode"
 };
 
 const Downloads = () => {
@@ -101,57 +85,71 @@ const Downloads = () => {
 
   const {primary} = useThemeStore(state => state);
 
+  // groupSelected now tracks selected individual file URIs
   const [groupSelected, setGroupSelected] = useState<string[]>([]);
   const [isSelecting, setIsSelecting] = useState(false);
 
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
-  // Load files from the download folder on initial render
-  useEffect(() => {
-    const getFiles = async () => {
-      setLoading(true);
-      const granted = await requestStoragePermission();
-      if (granted) {
-        try {
-          const properPath =
-            Platform.OS === 'android'
-              ? `file://${downloadFolder}`
-              : downloadFolder;
+  const getFiles = useCallback(async () => {
+    setLoading(true);
+    const granted = await requestStoragePermission();
+    // ... (rest of getFiles logic remains the same)
+    if (granted) {
+      try {
+        const properPath =
+          Platform.OS === 'android'
+            ? `file://${downloadFolder}`
+            : downloadFolder;
 
-          const allFiles = await FileSystem.readDirectoryAsync(properPath);
+        const allFiles = await FileSystem.readDirectoryAsync(properPath);
 
-          // Filter video files
-          const videoFiles = allFiles.filter(file => isVideoFile(file));
+        const videoFiles = allFiles.filter(file => isVideoFile(file));
 
-          const filesInfo = await Promise.all(
-            videoFiles.map(async file => {
-              const filePath =
-                Platform.OS === 'android'
-                  ? `file://${downloadFolder}/${file}`
-                  : `${downloadFolder}/${file}`;
+        const filesInfo = await Promise.all(
+          videoFiles.map(async file => {
+            const filePath =
+              Platform.OS === 'android'
+                ? `file://${downloadFolder}/${file}`
+                : `${downloadFolder}/${file}`;
 
-              const fileInfo = await FileSystem.getInfoAsync(filePath);
-              return fileInfo;
-            }),
-          );
+            const fileInfo = await FileSystem.getInfoAsync(filePath);
+            return fileInfo;
+          }),
+        );
 
-          // Save files info to storage
-          downloadsStorage.saveFilesInfo(filesInfo);
-          setFiles(filesInfo);
-          setLoading(false);
-        } catch (error) {
-          console.error('Error reading files:', error);
-          setLoading(false);
-        }
+        const validFiles = filesInfo.filter(
+          f =>
+            f.exists &&
+            isVideoFile(f.uri.split('/').pop() || '') &&
+            f.uri.startsWith('file:///'),
+        );
+
+        downloadsStorage.saveFilesInfo(validFiles);
+        setFiles(validFiles);
+        setLoading(false);
+      } catch (error) {
+        console.error('Error reading files:', error);
+        setLoading(false);
       }
-    };
-    getFiles();
+    } else {
+      setLoading(false);
+    }
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      getFiles();
+      return () => {
+        setGroupSelected([]);
+        setIsSelecting(false);
+      };
+    }, [getFiles]),
+  );
 
   async function getThumbnail(file: FileSystem.FileInfo) {
     try {
-      // Verify it's a video file before attempting to generate thumbnail
       const fileName = file.uri.split('/').pop();
       if (!fileName || !isVideoFile(fileName)) {
         return null;
@@ -162,63 +160,54 @@ const Downloads = () => {
       });
       return uri;
     } catch (error) {
-      console.log('error in getThumbnail:', error);
       return null;
     }
   }
 
-  // Generate thumbnails for each file
+  // Generate and cache thumbnails
   useEffect(() => {
     const getThumbnails = async () => {
+      const cachedThumbnails = downloadsStorage.getThumbnails() || {};
+      const filesToProcess = files.filter(
+        file => file.exists && !cachedThumbnails[file.uri],
+      );
+
+      if (filesToProcess.length === 0) {
+        setThumbnails(cachedThumbnails);
+        return;
+      }
+
       try {
-        const thumbnailPromises = files.map(async file => {
+        const thumbnailPromises = filesToProcess.map(async file => {
           const thumbnail = await getThumbnail(file);
-          if (thumbnail) {
-            return {[file.uri]: thumbnail};
-          }
-          return null;
+          return thumbnail ? {[file.uri]: thumbnail} : null;
         });
 
         const thumbnailResults = await Promise.all(thumbnailPromises);
         const newThumbnails = thumbnailResults.reduce((acc, curr) => {
           return curr ? {...acc, ...curr} : acc;
-        }, {});
+        }, cachedThumbnails);
 
-        // Save thumbnails to storage and fix the type error by ensuring non-null
-        if (newThumbnails) {
-          downloadsStorage.saveThumbnails(newThumbnails);
-        }
-        setThumbnails(newThumbnails || {});
+        downloadsStorage.saveThumbnails(newThumbnails);
+        setThumbnails(newThumbnails);
       } catch (error) {
         console.error('Error generating thumbnails:', error);
       }
     };
 
-    if (files.length > 0) {
-      getThumbnails();
-    }
+    getThumbnails();
   }, [files]);
 
-  // Load files and thumbnails from storage on initial render
-  useEffect(() => {
-    const cachedFiles = downloadsStorage.getFilesInfo();
-    if (cachedFiles) {
-      setFiles(cachedFiles);
-    }
-
-    const cachedThumbnails = downloadsStorage.getThumbnails();
-    if (cachedThumbnails) {
-      setThumbnails(cachedThumbnails);
-    }
-  }, []);
-
+  // Function to delete selected files
   const deleteFiles = async () => {
+    const allUrisToDelete = groupSelected;
+
+    if (allUrisToDelete.length === 0) return;
+
     try {
-      // Process each file
       await Promise.all(
-        groupSelected.map(async fileUri => {
+        allUrisToDelete.map(async fileUri => {
           try {
-            // Remove the 'file://' prefix for Android
             const path =
               Platform.OS === 'android'
                 ? fileUri.replace('file://', '')
@@ -230,204 +219,188 @@ const Downloads = () => {
             }
           } catch (error) {
             console.error(`Error deleting file ${fileUri}:`, error);
-            throw error; // Re-throw to be caught by the outer try-catch
           }
         }),
       );
 
-      // Update state after successful deletion
-      const newFiles = files.filter(file => !groupSelected.includes(file.uri));
+      const newFiles = files.filter(
+        file => !allUrisToDelete.includes(file.uri),
+      );
       setFiles(newFiles);
+      downloadsStorage.saveFilesInfo(newFiles);
+
+      const newThumbnails = {...thumbnails};
+      allUrisToDelete.forEach(uri => delete newThumbnails[uri]);
+      setThumbnails(newThumbnails);
+      downloadsStorage.saveThumbnails(newThumbnails);
+
       setGroupSelected([]);
       setIsSelecting(false);
-
-      // Optional: Show success message
+      RNReactNativeHapticFeedback.trigger('notificationSuccess');
     } catch (error) {
-      console.error('Error deleting files:', error);
+      console.error('Overall error deleting files:', error);
+      RNReactNativeHapticFeedback.trigger('notificationError');
     }
   };
 
-  // Add this function to group files by series name
-  const groupMediaFiles = (): MediaGroup[] => {
-    const groups: Record<string, MediaGroup> = {};
+  // Maps FileSystem.FileInfo to MediaItem for rendering
+  const mediaItems: MediaItem[] = files.map(file => ({
+    ...file,
+    title: getReadableTitle(file.uri.split('/').pop() || ''),
+  }));
 
-    // First pass: Group by normalized base name
-    files.forEach(file => {
-      const fileName = file.uri.split('/').pop() || '';
-      const baseName = getBaseName(fileName);
-      const normalizedBaseName = normalizeString(baseName);
+  // Function to handle a single item selection/deselection
+  const toggleSelection = (fileUri: string) => {
+    const isCurrentlySelected = groupSelected.includes(fileUri);
 
-      if (!groups[normalizedBaseName]) {
-        groups[normalizedBaseName] = {
-          title: baseName,
-          episodes: [],
-          thumbnail: thumbnails[file.uri],
-          isMovie: true,
-        };
+    if (settingsStorage.isHapticFeedbackEnabled()) {
+      RNReactNativeHapticFeedback.trigger('effectTick');
+    }
+
+    if (isCurrentlySelected) {
+      const newSelection = groupSelected.filter(f => f !== fileUri);
+      setGroupSelected(newSelection);
+      if (newSelection.length === 0) {
+        setIsSelecting(false);
       }
-      groups[normalizedBaseName].episodes.push(file);
-    });
+    } else {
+      setGroupSelected([...groupSelected, fileUri]);
+    }
+  };
 
-    // Second pass: Determine if each group is a movie or series
-    Object.values(groups).forEach(group => {
-      const hasEpisodeIndicators = group.episodes.some(file => {
-        const fileName = file.uri.split('/').pop() || '';
-        return getEpisodeInfo(fileName).episode > 0;
+  // Function to handle item press (navigation)
+  const handleItemPress = (item: MediaItem) => {
+    if (isSelecting) {
+      toggleSelection(item.uri);
+    } else {
+      const directUrl = item.uri.startsWith('file://')
+        ? item.uri
+        : `file://${item.uri}`;
+
+      navigation.navigate('Player', {
+        episodeList: [{title: item.title, link: directUrl}],
+        linkIndex: 0,
+        type: 'download',
+        directUrl: directUrl,
+        primaryTitle: item.title,
+        poster: thumbnails[item.uri] ? {uri: thumbnails[item.uri]} : {},
+        providerValue: 'vega',
       });
-
-      group.isMovie = !(group.episodes.length > 1 || hasEpisodeIndicators);
-
-      // Sort episodes by season and episode number if it's a series
-      if (!group.isMovie) {
-        group.episodes.sort((a, b) => {
-          const aName = a.uri.split('/').pop() || '';
-          const bName = b.uri.split('/').pop() || '';
-          const aInfo = getEpisodeInfo(aName);
-          const bInfo = getEpisodeInfo(bName);
-
-          if (aInfo.season !== bInfo.season) {
-            return aInfo.season - bInfo.season;
-          }
-          return aInfo.episode - bInfo.episode;
-        });
-      }
-    });
-
-    return Object.values(groups);
+    }
   };
 
   return (
-    <View className="mt-14 px-2 w-full h-full">
+    <View className="mt-14 px-2 w-full h-full bg-black">
       <View className="flex-row justify-between items-center mb-4">
-        <Text className="text-2xl">Downloads</Text>
+        <Text className="text-2xl text-white">Downloads</Text>
         <View className="flex-row gap-x-7 items-center">
           {isSelecting && (
-            <MaterialCommunityIcons
-              name="close"
-              size={28}
-              color={primary}
+            <TouchableOpacity
               onPress={() => {
                 setGroupSelected([]);
                 setIsSelecting(false);
-              }}
-            />
+              }}>
+              <MaterialCommunityIcons name="close" size={28} color={primary} />
+            </TouchableOpacity>
           )}
           {isSelecting && groupSelected.length > 0 && (
-            <MaterialCommunityIcons
-              name="delete-outline"
-              size={28}
-              color={primary}
-              onPress={deleteFiles}
-            />
+            <TouchableOpacity onPress={deleteFiles}>
+              <MaterialCommunityIcons
+                name="delete-outline"
+                size={28}
+                color={primary}
+              />
+            </TouchableOpacity>
           )}
         </View>
       </View>
 
       <FlashList
-        data={groupMediaFiles()}
+        data={mediaItems}
         numColumns={3}
-        estimatedItemSize={150}
+        estimatedItemSize={200}
         ListEmptyComponent={() =>
           !loading && (
             <View className="flex-1 justify-center items-center mt-10">
-              <Text className="text-center text-lg">Looks Empty Here!</Text>
+              <Text className="text-center text-lg text-white opacity-80">
+                Looks Empty Here!
+              </Text>
             </View>
           )
         }
-        renderItem={({item}) => (
-          <TouchableOpacity
-            className={`flex-1 m-0.5 rounded-lg overflow-hidden ${
-              isSelecting && groupSelected.includes(item.episodes[0].uri)
-                ? 'bg-quaternary'
-                : 'bg-tertiary'
-            }`}
-            onLongPress={() => {
-              if (settingsStorage.isHapticFeedbackEnabled()) {
-                RNReactNativeHapticFeedback.trigger('effectTick', {
-                  enableVibrateFallback: true,
-                  ignoreAndroidSystemSettings: false,
-                });
-              }
-              setGroupSelected(item.episodes.map(ep => ep.uri));
-              setIsSelecting(true);
-            }}
-            onPress={() => {
-              if (isSelecting) {
-                if (settingsStorage.isHapticFeedbackEnabled()) {
-                  RNReactNativeHapticFeedback.trigger('effectTick', {
-                    enableVibrateFallback: true,
-                    ignoreAndroidSystemSettings: false,
-                  });
+        renderItem={({item}) => {
+          const isSelected = isSelecting && groupSelected.includes(item.uri);
+          const fileName = item.uri.split('/').pop() || '';
+          const episodeInfo = getEpisodeInfo(fileName);
+          const isEpisode = episodeInfo.episode > 0;
+          const episodeLabel = isEpisode ? `E${episodeInfo.episode}` : '';
+
+          return (
+            <TouchableOpacity
+              key={item.uri}
+              className={`flex-1 m-0.5 rounded-lg overflow-hidden border-2 ${
+                isSelected
+                  ? `border-[${primary}] bg-quaternary/50`
+                  : 'border-transparent bg-tertiary'
+              }`}
+              onLongPress={() => {
+                if (!isSelecting) {
+                  RNReactNativeHapticFeedback.trigger('impactHeavy');
+                  setIsSelecting(true);
+                  setGroupSelected([item.uri]);
                 }
-                if (groupSelected.includes(item.episodes[0].uri)) {
-                  setGroupSelected(
-                    groupSelected.filter(f => f !== item.episodes[0].uri),
-                  );
-                } else {
-                  setGroupSelected([...groupSelected, item.episodes[0].uri]);
-                }
-                if (
-                  groupSelected.length === 1 &&
-                  groupSelected[0] === item.episodes[0].uri
-                ) {
-                  setIsSelecting(false);
-                  setGroupSelected([]);
-                }
-              } else {
-                // Direct play for movies, navigate to episodes for series
-                if (item.isMovie) {
-                  const file = item.episodes[0];
-                  const fileName = file.uri.split('/').pop() || '';
-                  navigation.navigate('Player', {
-                    episodeList: [{title: fileName, link: file.uri}],
-                    linkIndex: 0,
-                    type: '',
-                    directUrl: file.uri,
-                    primaryTitle: item.title,
-                    poster: {},
-                    providerValue: 'vega',
-                  });
-                } else {
-                  navigation.navigate('TabStack', {
-                    screen: 'SettingsStack',
-                    params: {
-                      screen: 'WatchHistoryStack',
-                      params: {
-                        screen: 'SeriesEpisodes',
-                        params: {
-                          episodes: item.episodes as any,
-                          series: item.title,
-                          thumbnails: thumbnails,
-                        },
-                      },
-                    },
-                  });
-                }
-              }
-            }}>
-            <View className="relative aspect-[2/3]">
-              {item.thumbnail ? (
-                <Image
-                  source={{uri: item.thumbnail}}
-                  className="w-full h-full rounded-t-lg"
-                  resizeMode="cover"
-                />
-              ) : (
-                <View className="w-full h-full bg-quaternary rounded-t-lg" />
-              )}
-              <View className="absolute bottom-0 left-0 right-0 bg-black/50 p-1">
-                <Text className="text-white text-xs" numberOfLines={1}>
-                  {item.title}
-                </Text>
-                {!item.isMovie && (
-                  <Text className="text-white text-xs opacity-70">
-                    {item.episodes.length} episodes
-                  </Text>
+              }}
+              onPress={() => handleItemPress(item)}>
+              <View className="relative aspect-[2/3]">
+                {thumbnails[item.uri] ? (
+                  <Image
+                    source={{uri: thumbnails[item.uri]}}
+                    className="w-full h-full rounded-lg"
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View className="w-full h-full bg-quaternary rounded-lg justify-center items-center">
+                    <MaterialCommunityIcons
+                      name="movie-roll"
+                      size={40}
+                      color="gray"
+                    />
+                  </View>
                 )}
+
+                {/* EPISODE NUMBER CIRCLE */}
+                {isEpisode && (
+                  <View
+                    className={`absolute top-1 left-1 bg-black/70 rounded-full w-8 h-8 justify-center items-center border border-[${primary}]`}>
+                    <Text className="text-white text-xs font-bold">
+                      {episodeLabel}
+                    </Text>
+                  </View>
+                )}
+
+                {/* SELECTION CHECKMARK */}
+                {isSelected && (
+                  <View className="absolute top-1 right-1">
+                    <MaterialCommunityIcons
+                      name="check-circle"
+                      size={28}
+                      color={primary}
+                    />
+                  </View>
+                )}
+
+                {/* TITLE BAR */}
+                <View className="absolute bottom-0 left-0 right-0 bg-black/70 p-1 rounded-b-lg">
+                  <Text
+                    className="text-white text-xs font-bold"
+                    numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                </View>
               </View>
-            </View>
-          </TouchableOpacity>
-        )}
+            </TouchableOpacity>
+          );
+        }}
       />
     </View>
   );
