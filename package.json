@@ -1,6 +1,6 @@
 {
   "name": "vega-next",
-  "version": "3.3.5",
+  "version": "3.3.6",
   "private": true,
   "scripts": {
     "android": "expo run:android",
@@ -24,6 +24,7 @@
     "@expo/config-plugins": "~9.0.0",
     "@gorhom/bottom-sheet": "^4.6.4",
     "@notifee/react-native": "^9.1.8",
+    "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-clipboard/clipboard": "^1.16.3",
     "@react-native-community/blur": "^4.4.1",
     "@react-navigation/bottom-tabs": "^7.4.2",

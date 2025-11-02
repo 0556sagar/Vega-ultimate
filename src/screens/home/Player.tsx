@@ -8,6 +8,8 @@ import {
   Platform,
   TouchableNativeFeedback,
   StatusBar,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -54,20 +56,13 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Player'>;
 const MOCK_FAST_FORWARD_RATES = [1.5, 2.0, 3.0, 4.0];
 const MOCK_DEFAULT_FF_RATE = 2.0;
 
-// FIX: Always returns the default rate since persistence is unreliable.
 const getFastForwardRate = () => {
   return MOCK_DEFAULT_FF_RATE;
 };
-
-// FIX: This function no longer saves to storage to prevent the TypeError.
-const setFastForwardRate = (rate: number) => {
-  // Persistence removed. Rate will be managed by local state (setLocalFastForwardRate) only.
-  console.log(`Fast Forward rate set locally to: ${rate}`);
-};
 // ---------------------------------------------------------------------
 
-// FIX: Re-introduced the required holding time for fast forward (10 seconds)
-const FAST_FORWARD_DELAY_MS = 1500;
+// FIX: Changed from 1500ms to 2000ms (2 seconds)
+const FAST_FORWARD_DELAY_MS = 1300;
 
 const Player = ({route}: Props): React.JSX.Element => {
   const {primary} = useThemeStore(state => state);
@@ -80,8 +75,21 @@ const Player = ({route}: Props): React.JSX.Element => {
   const playerRef: React.RefObject<VideoRef> = useRef(null);
   const hasSetInitialTracksRef = useRef(false);
 
-  // Timer ref for the 10-second long press delay
+  // <<< FIX FOR PIP RESTORATION: State to force re-render/reset video view size on PIP restore
+  const [keyForPlayer, setKeyForPlayer] = useState(0);
+
+  // <<< FIX FOR PIP RESTORATION: State to conditionally render the player for layout reset
+  const [showPlayer, setShowPlayer] = useState(true);
+  // >>> END OF PIP RESTORATION STATES
+
+  // Timer ref for the fast-forward long press delay
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // === FIX: Touch tracking refs for scroll/swipe cancellation ===
+  const touchStartXRef = useRef(0);
+  const touchStartYRef = useRef(0);
+  const isMovingRef = useRef(false);
+  // ==============================================================
 
   // Shared values for animations
   const loadingOpacity = useSharedValue(0);
@@ -204,65 +212,100 @@ const Player = ({route}: Props): React.JSX.Element => {
   }, [isFastForwarding, fastForwardRate, basePlaybackRate]);
 
   // Handle touch events for fast-forward
-  const handleTouchStart = useCallback(() => {
-    // Only activate FF if player is not locked, controls are hidden, and settings are hidden
-    if (
-      !isPlayerLocked &&
-      !showControls &&
-      !showSettings &&
-      playerRef.current
-    ) {
-      // 1. Clear any existing timer just in case
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current);
+  const handleTouchStart = useCallback(
+    (e: any) => {
+      // Record initial touch position for movement detection
+      touchStartXRef.current = e.nativeEvent.pageX;
+      touchStartYRef.current = e.nativeEvent.pageY;
+      isMovingRef.current = false; // Reset movement flag
+
+      // 1. Only activate FF if player is not locked, controls are hidden, and settings are hidden
+      if (
+        !isPlayerLocked &&
+        !showControls &&
+        !showSettings &&
+        playerRef.current
+      ) {
+        // 2. Clear any existing timer just in case
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+        }
+
+        // 3. Start a timer for the 2-second long press delay (FAST_FORWARD_DELAY_MS)
+        longPressTimerRef.current = setTimeout(() => {
+          // 4. Only activate FF after the delay AND if not a scroll/move
+          if (!isMovingRef.current) {
+            setIsFastForwarding(true);
+            // Show Fast Forward toast
+            setToastMessage(`Fast Forward ${fastForwardRate.toFixed(1)}x`);
+            setShowToast(true);
+            // Clear the timer reference since it has completed
+            longPressTimerRef.current = null;
+          } else {
+            // If it was a move and the timer fires, just clear the timer.
+            longPressTimerRef.current = null;
+          }
+        }, FAST_FORWARD_DELAY_MS);
       }
+    },
+    [
+      isPlayerLocked,
+      showControls,
+      showSettings,
+      fastForwardRate,
+      setShowToast,
+      setToastMessage,
+    ],
+  );
 
-      // 2. FIX: Start a timer for the 10-second long press delay
-      longPressTimerRef.current = setTimeout(() => {
-        // 3. Only activate FF after the delay
-        setIsFastForwarding(true);
-        // Show Fast Forward toast
-        setToastMessage(`Fast Forward ${fastForwardRate.toFixed(1)}x`);
-        setShowToast(true);
-      }, FAST_FORWARD_DELAY_MS);
-    }
-  }, [
-    isPlayerLocked,
-    showControls,
-    showSettings,
-    fastForwardRate,
-    setShowToast,
-    setToastMessage,
-  ]);
+  // FIX: This now actively detects movement and cancels the pending long-press.
+  const handleTouchMove = useCallback(
+    (e: any) => {
+      // Check if the touch has moved significantly (e.g., more than 10 pixels in either axis)
+      const deltaX = Math.abs(e.nativeEvent.pageX - touchStartXRef.current);
+      const deltaY = Math.abs(e.nativeEvent.pageY - touchStartYRef.current);
+      const MIN_MOVE_DISTANCE = 10; // Threshold for movement (e.g., 10 pixels)
 
-  // Handler to cancel FF on any touch movement (scroll/pan)
-  const handleTouchMove = useCallback(() => {
-    // 1. Clear the timer immediately on touch move
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-    // 2. Stop fast-forwarding if it was active
-    if (isFastForwarding) {
-      setIsFastForwarding(false);
-      setShowToast(false);
-    }
-  }, [isFastForwarding, setShowToast]);
+      if (deltaX > MIN_MOVE_DISTANCE || deltaY > MIN_MOVE_DISTANCE) {
+        isMovingRef.current = true; // Mark as a move/scroll gesture
+
+        // If a timer is running (meaning a long press is pending), clear it immediately.
+        if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+        }
+
+        // If fast-forwarding was active (e.g., if we try to FF and then scroll)
+        if (isFastForwarding) {
+          setIsFastForwarding(false);
+          setShowToast(false);
+        }
+      }
+    },
+    [isFastForwarding, setShowToast],
+  );
 
   const handleTouchEnd = useCallback(() => {
-    // 1. Clear the timer immediately on touch end (prevents FF from starting)
+    // 1. If the timer is still running, clear it (means hold was too short)
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
     }
 
     // 2. Stop fast-forwarding if it was active
+    // This immediately stops the FF action upon release.
     if (isFastForwarding) {
       setIsFastForwarding(false);
       // Hide Fast Forward toast
       setShowToast(false);
     }
+
+    // Reset the moving flag after a brief moment to ensure a clean start for the next touch.
+    setTimeout(() => {
+      isMovingRef.current = false;
+    }, 50);
   }, [isFastForwarding, setShowToast]);
+  // --- END OF FAST FORWARD FEATURE LOGIC ---
 
   // Custom hook for progress handling
   const {videoPositionRef, handleProgress} = usePlayerProgress({
@@ -287,7 +330,7 @@ const Player = ({route}: Props): React.JSX.Element => {
     [],
   );
   const showMediaControls = useMemo(
-    () => settingsStorage.showMediaControls(),
+    () => settingsStorage.showMediaControls() || false,
     [],
   );
 
@@ -372,17 +415,38 @@ const Player = ({route}: Props): React.JSX.Element => {
     [switchToNextStream, navigation, setShowControls],
   );
 
-  // Handler for returning from Picture-in-Picture
+  // <<< FIX FOR PIP RESTORATION: Handler for returning from Picture-in-Picture
   const handleRestorePIP = useCallback(() => {
-    // Reset playback rate to 1.0 to prevent errors if it was a custom rate
+    // 1. Reset playback rate to 1.0 (recommended after PIP)
     setBasePlaybackRate(1.0);
-    // Ensure the player is resumed
-    playerRef?.current?.resume();
+
+    // 2. Temporarily hide the player to UNMOUNT it. This is CRITICAL to force the
+    //    native view to release its previous smaller PIP bounds and trigger a full
+    //    re-render/re-measure when it is shown again.
+    setShowPlayer(false);
+
+    // 3. Use an extended delay (400ms) to ensure the unmount and the full-screen layout
+    //    pass completes before remounting.
+    setTimeout(() => {
+      // 4. Force component re-render by updating the key.
+      setKeyForPlayer(prev => prev + 1);
+
+      // 5. Re-show the player. It will mount now with the new full-screen layout.
+      setShowPlayer(true);
+
+      // 6. Resume the player after a brief moment to ensure the Video component is mounted
+      setTimeout(() => {
+        playerRef?.current?.resume();
+      }, 200); // Resume delay increased to 200ms
+    }, 400); // **Core delay increased to 400ms**
   }, [setBasePlaybackRate]);
+  // >>> END OF PIP RESTORATION LOGIC
 
   // Cleanup timers on unmount
   useEffect(() => {
     return () => {
+      // FIX: Ensure video is paused on unmount as a fallback
+      playerRef?.current?.pause();
       if (unlockButtonTimerRef.current) {
         clearTimeout(unlockButtonTimerRef.current);
       }
@@ -397,9 +461,39 @@ const Player = ({route}: Props): React.JSX.Element => {
     FullScreenChz.enable();
     const unsubscribe = navigation.addListener('beforeRemove', () => {
       FullScreenChz.disable();
+      // FIX: Ensure video is paused immediately before screen removal/unmount
+      playerRef?.current?.pause();
     });
     return unsubscribe;
   }, [navigation]);
+
+  // --- FIX FOR AUTOMATIC PIP ON BACKGROUND: useEffect for AppState ---
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      if (
+        nextAppState.match(/inactive|background/) &&
+        playerRef.current &&
+        !isPlayerLocked &&
+        !showSettings
+      ) {
+        playerRef.current.enterPictureInPicture();
+      }
+    };
+
+    const subscription = AppState.addEventListener(
+      'change',
+      handleAppStateChange,
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [isPlayerLocked, showSettings]);
+  // --- END OF APPSTATE LOGIC ---
 
   // Reset track selections when stream changes
   useEffect(() => {
@@ -593,11 +687,12 @@ const Player = ({route}: Props): React.JSX.Element => {
       onProgress: handleProgress,
       onLoad: () => {
         playerRef?.current?.seek(watchedDuration);
-        playerRef?.current?.resume();
+        playerRef?.current?.resume(); // Ensure player is resumed on load/seek
         setBasePlaybackRate(1.0); // Use the base setter
       },
-      // Handler for returning from PIP to prevent TypeError
+      // <<< FIX FOR PIP RESTORATION: Pass the handler to the player
       onRestoreUserInterfaceForPictureInPicture: handleRestorePIP,
+      // >>> END OF PIP RESTORATION PROP
       videoRef: playerRef,
       rate: finalPlaybackRate, // Use the final calculated rate
       poster: route.params?.poster?.logo || '',
@@ -729,13 +824,29 @@ const Player = ({route}: Props): React.JSX.Element => {
       <OrientationLocker orientation={LANDSCAPE} />
 
       {/* Main touch area for fast-forward gesture */}
+      {/* This view now correctly uses onTouchMove to cancel the long-press timer if movement (swipe/scroll) is detected. */}
       <View
         className="flex-1"
         onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
+        onTouchMove={handleTouchMove} // <<< CRITICAL FIX: Added onTouchMove
         onTouchEnd={handleTouchEnd}>
-        {/* Video Player */}
-        <VideoPlayer {...videoPlayerProps} />
+        {/* NEW WRAPPER: This TouchableOpacity is placed directly over the VideoPlayer. */}
+        {/* It captures all touches meant for the player area (including volume/brightness gestures) */}
+        {/* and PREVENTS them from bubbling up to the main View, solving the unintended FF issue. */}
+        <TouchableOpacity
+          activeOpacity={1}
+          className="flex-1"
+          // CRITICAL FIX: Stop the touch events from the VideoPlayer area from bubbling up
+          // to the parent View (which has the handleTouchStart/End logic).
+          onTouchStart={e => e.stopPropagation()}
+          onTouchMove={e => e.stopPropagation()} // Added stopPropagation for move events too
+          onTouchEnd={e => e.stopPropagation()}>
+          {/* <<< FIX FOR PIP RESTORATION: Conditionally render with key to force layout reset */}
+          {showPlayer && (
+            <VideoPlayer key={keyForPlayer} {...videoPlayerProps} />
+          )}
+          {/* >>> END OF PIP RESTORATION RENDER */}
+        </TouchableOpacity>
 
         {/* Full-screen overlay to detect taps when locked */}
         {isPlayerLocked && (
@@ -772,14 +883,14 @@ const Player = ({route}: Props): React.JSX.Element => {
         {!isPlayerLocked && (
           <Animated.View
             style={[controlsStyle]}
-            className="absolute bottom-3 right-6 flex flex-row justify-center w-full gap-x-16">
+            className="absolute bottom-3 right-6 flex flex-row justify-center w-full gap-x-12">
             {/* Audio controls */}
             <TouchableOpacity
               onPress={() => {
                 setActiveTab('audio');
                 setShowSettings(!showSettings);
               }}
-              className="flex flex-row gap-x-1 items-center">
+              className="flex flex-row gap-2 items-center">
               <MaterialIcons
                 style={{opacity: 0.7}}
                 name={'multitrack-audio'}
@@ -797,7 +908,7 @@ const Player = ({route}: Props): React.JSX.Element => {
                 setActiveTab('subtitle');
                 setShowSettings(!showSettings);
               }}
-              className="flex flex-row gap-x-1 items-center">
+              className="flex flex-row gap-2 items-center">
               <MaterialIcons
                 style={{opacity: 0.6}}
                 name={'subtitles'}
@@ -892,7 +1003,10 @@ const Player = ({route}: Props): React.JSX.Element => {
               route.params?.episodeList?.length - 1 &&
               videoPositionRef.current.position /
                 videoPositionRef.current.duration >
-                0.8 && (
+                0.7 &&
+              videoPositionRef.current.position /
+                videoPositionRef.current.duration <
+                0.9 && (
                 <TouchableOpacity
                   className="flex-row items-center opacity-60"
                   onPress={handleNextEpisode}>
@@ -938,7 +1052,7 @@ const Player = ({route}: Props): React.JSX.Element => {
                 )}
                 {audioTracks.map((track, i) => (
                   <TouchableOpacity
-                    className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
+                    className="flex-row gap-2 items-center rounded-md my-1 overflow-hidden ml-2"
                     key={i}
                     onPress={() => {
                       setSelectedAudioTrack({
@@ -984,85 +1098,36 @@ const Player = ({route}: Props): React.JSX.Element => {
               </ScrollView>
             )}
 
-            {/* Subtitle Tab */}
+            {/* Subtitle Tab - FIX: Replaced FlashList with ScrollView to fix Invariant Violation */}
             {activeTab === 'subtitle' && (
-              <FlashList
-                estimatedItemSize={70}
-                data={textTracks}
-                ListHeaderComponent={
-                  <View>
-                    <Text className="text-lg font-bold text-center text-white">
-                      Subtitle
-                    </Text>
-                    <TouchableOpacity
-                      className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-3"
-                      onPress={() => {
-                        setSelectedTextTrack({
-                          type: SelectedTrackType.DISABLED,
-                        });
-                        setSelectedTextTrackIndex(1000);
-                        cacheStorage.setString('lastTextTrack', '');
-                        setShowSettings(false);
-                      }}>
-                      <Text
-                        className="text-base font-semibold"
-                        style={{
-                          color:
-                            selectedTextTrackIndex === 1000 ? primary : 'white',
-                        }}>
-                        Disabled
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                }
-                ListFooterComponent={
-                  <>
-                    <TouchableOpacity
-                      className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
-                      onPress={async () => {
-                        try {
-                          const res = await DocumentPicker.getDocumentAsync({
-                            type: [
-                              'text/vtt',
-                              'application/x-subrip',
-                              'text/srt',
-                              'application/ttml+xml',
-                            ],
-                            multiple: false,
-                          });
+              <ScrollView className="w-full h-full p-1 px-4">
+                <Text className="text-lg font-bold text-center text-white">
+                  Subtitle
+                </Text>
+                <TouchableOpacity
+                  className="flex-row gap-2 items-center rounded-md my-1 overflow-hidden ml-3"
+                  onPress={() => {
+                    setSelectedTextTrack({
+                      type: SelectedTrackType.DISABLED,
+                    });
+                    setSelectedTextTrackIndex(1000);
+                    cacheStorage.setString('lastTextTrack', '');
+                    setShowSettings(false);
+                  }}>
+                  <Text
+                    className="text-base font-semibold"
+                    style={{
+                      color:
+                        selectedTextTrackIndex === 1000 ? primary : 'white',
+                    }}>
+                    Disabled
+                  </Text>
+                </TouchableOpacity>
 
-                          if (!res.canceled && res.assets?.[0]) {
-                            const asset = res.assets[0];
-                            const track = {
-                              type: asset.mimeType as any,
-                              title:
-                                asset.name && asset.name.length > 20
-                                  ? asset.name.slice(0, 20) + '...'
-                                  : asset.name || 'undefined',
-                              language: 'und',
-                              uri: asset.uri,
-                            };
-                            setExternalSubs((prev: any) => [track, ...prev]);
-                          }
-                        } catch (err) {
-                          console.log(err);
-                        }
-                      }}>
-                      <MaterialIcons name="add" size={20} color="white" />
-                      <Text className="text-base font-semibold text-white">
-                        Add external file
-                      </Text>
-                    </TouchableOpacity>
-                    <SearchSubtitles
-                      searchQuery={searchQuery}
-                      setSearchQuery={setSearchQuery}
-                      setExternalSubs={setExternalSubs}
-                    />
-                  </>
-                }
-                renderItem={({item: track}) => (
+                {textTracks.map(track => (
                   <TouchableOpacity
-                    className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
+                    className="flex-row gap-2 items-center rounded-md my-1 overflow-hidden ml-2"
+                    key={track.index}
                     onPress={() => {
                       setSelectedTextTrack({
                         type: SelectedTrackType.INDEX,
@@ -1109,8 +1174,51 @@ const Player = ({route}: Props): React.JSX.Element => {
                       <MaterialIcons name="check" size={20} color="white" />
                     )}
                   </TouchableOpacity>
-                )}
-              />
+                ))}
+
+                {/* External Subtitle controls (kept outside the map) */}
+                <TouchableOpacity
+                  className="flex-row gap-2 items-center rounded-md my-1 overflow-hidden ml-2"
+                  onPress={async () => {
+                    try {
+                      const res = await DocumentPicker.getDocumentAsync({
+                        type: [
+                          'text/vtt',
+                          'application/x-subrip',
+                          'text/srt',
+                          'application/ttml+xml',
+                        ],
+                        multiple: false,
+                      });
+
+                      if (!res.canceled && res.assets?.[0]) {
+                        const asset = res.assets[0];
+                        const track = {
+                          type: asset.mimeType as any,
+                          title:
+                            asset.name && asset.name.length > 20
+                              ? asset.name.slice(0, 20) + '...'
+                              : asset.name || 'undefined',
+                          language: 'und',
+                          uri: asset.uri,
+                        };
+                        setExternalSubs((prev: any) => [track, ...prev]);
+                      }
+                    } catch (err) {
+                      console.log(err);
+                    }
+                  }}>
+                  <MaterialIcons name="add" size={20} color="white" />
+                  <Text className="text-base font-semibold text-white">
+                    Add external file
+                  </Text>
+                </TouchableOpacity>
+                <SearchSubtitles
+                  searchQuery={searchQuery}
+                  setSearchQuery={setSearchQuery}
+                  setExternalSubs={setExternalSubs}
+                />
+              </ScrollView>
             )}
 
             {/* Server Tab */}
@@ -1123,7 +1231,7 @@ const Player = ({route}: Props): React.JSX.Element => {
                   {streamData?.length > 0 &&
                     streamData?.map((track, i) => (
                       <TouchableOpacity
-                        className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
+                        className="flex-row gap-2 items-center rounded-md my-1 overflow-hidden ml-2"
                         key={i}
                         onPress={() => {
                           setSelectedStream(track);
@@ -1154,7 +1262,7 @@ const Player = ({route}: Props): React.JSX.Element => {
                   {videoTracks &&
                     videoTracks.map((track: any, i: any) => (
                       <TouchableOpacity
-                        className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
+                        className="flex-row gap-2 items-center rounded-md my-1 overflow-hidden ml-2"
                         key={i}
                         onPress={() => {
                           setSelectedVideoTrack({
@@ -1199,7 +1307,7 @@ const Player = ({route}: Props): React.JSX.Element => {
                 </Text>
                 {playbacks.map((rate, i) => (
                   <TouchableOpacity
-                    className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
+                    className="flex-row gap-2 items-center rounded-md my-1 overflow-hidden ml-2"
                     key={i}
                     onPress={() => {
                       setBasePlaybackRate(rate);
@@ -1228,12 +1336,11 @@ const Player = ({route}: Props): React.JSX.Element => {
                 </Text>
                 {MOCK_FAST_FORWARD_RATES.map((rate, i) => (
                   <TouchableOpacity
-                    className="flex-row gap-3 items-center rounded-md my-1 overflow-hidden ml-2"
+                    className="flex-row gap-2 items-center rounded-md my-1 overflow-hidden ml-2"
                     key={i}
                     onPress={() => {
                       // FIX: Only update local state to avoid storage error
                       setLocalFastForwardRate(rate);
-                      // setFastForwardRate(rate); // Removed to prevent storage crash
                       setShowSettings(false);
                     }}>
                     <Text
