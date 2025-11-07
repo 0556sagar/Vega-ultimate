@@ -69,13 +69,12 @@ import {
   checkAppInstallPermission,
   requestAppInstallPermission,
 } from 'react-native-install-unknown-apps';
-import VegaMusicHome from './screens/music/VegaMusicHome';
-import VegaSettings from './screens/music/VegaSettings';
 import LiveTVScreen from './screens/tv/LiveTVScreen';
 import TVPlayerScreen from './screens/tv/TVPlayerScreen';
 import useAppModeStore from './lib/zustand/appModeStore';
 import VegaTVSettingsScreen from './screens/tv/VegaTVSettingsScreen';
 import * as Application from 'expo-application';
+import Suggestion from './screens/Suggestion';
 
 enableScreens(true);
 enableFreeze(true);
@@ -268,6 +267,7 @@ function SearchStackScreen() {
       <SearchStack.Screen name="ScrollList" component={ScrollList} />
       <SearchStack.Screen name="GenreList" component={ScrollList} />
       <SearchStack.Screen name="Info" component={Info} />
+      <Stack.Screen name="Suggestion" component={Suggestion} />
       <SearchStack.Screen name="SearchResults" component={SearchResults} />
       <SearchStack.Screen name="Webview" component={WebView} />
     </SearchStack.Navigator>

@@ -106,12 +106,11 @@ const GENRE_MOVIES = {
   horror: [
     {Title: 'The Conjuring', Year: '2013', imdbID: 'tt1457767', Type: 'movie'},
     {Title: 'Hereditary', Year: '2018', imdbID: 'tt7784604', Type: 'movie'},
-  ],
-  // Add other genres as needed
+  ], // Add other genres as needed
 };
 
 // Helper components for a cleaner render function
-const RenderHeader = ({title, index}) => (
+const RenderHeader = ({title, index}: {title: string; index: number}) => (
   <Animated.View
     entering={FadeInDown.delay(index * 50)}
     layout={Layout.springify()}
@@ -120,7 +119,7 @@ const RenderHeader = ({title, index}) => (
   </Animated.View>
 );
 
-const RenderGenreItem = ({item, index, primary, handleSearch}) => (
+const RenderGenreItem = ({item, index, primary, handleSearch}: any) => (
   <Animated.View
     entering={FadeInDown.delay(index * 50)}
     layout={Layout.springify()}>
@@ -142,7 +141,7 @@ const RenderGenreItem = ({item, index, primary, handleSearch}) => (
   </Animated.View>
 );
 
-const RenderMovieItem = ({item, index, primary, handleSearch}) => (
+const RenderMovieItem = ({item, index, primary, handleSearch}: any) => (
   <Animated.View
     entering={FadeInDown.delay(index * 50)}
     layout={Layout.springify()}>
@@ -159,11 +158,13 @@ const RenderMovieItem = ({item, index, primary, handleSearch}) => (
           />
           <View>
             <Text className="text-white text-base">{item.Title || item.l}</Text>
+            {/* FIX: Ensure subtitle is a single concatenated string inside Text */}
             <Text className="text-white/50 text-xs">
-              {(item.Type || item.q) === 'series' || item.q === 'tv_series'
+              {((item.Type || item.q) === 'series' || item.q === 'tv_series'
                 ? 'TV Show'
-                : 'Movie'}{' '}
-              • {item.Year || item.y}
+                : 'Movie') +
+                ' • ' +
+                (item.Year || item.y)}
             </Text>
           </View>
         </View>
@@ -189,12 +190,9 @@ const Search = () => {
     OMDBResult[]
   >([]);
 
-  // NEW: Add a loading state
   const [isLoading, setIsLoading] = useState(false);
-  // NEW: Add an error state
   const [error, setError] = useState('');
 
-  // NEW: Consolidated function to save a search term to history
   const saveSearchToHistory = (searchTerm: string) => {
     if (searchTerm.trim()) {
       const prevSearches = MMKV.getArray<string>('searchHistory') || [];
@@ -209,7 +207,6 @@ const Search = () => {
     }
   };
 
-  // Function to search IMDB for suggestions
   const searchIMDB = async (text: string): Promise<IMDBResult[]> => {
     if (!text) {
       return [];
@@ -220,12 +217,12 @@ const Search = () => {
     )}.json`;
     try {
       const response = await fetch(url);
+      // NOTE: This API may return JSONP. The logic for stripping it is in Suggestion.tsx, but assuming plain JSON here.
       const data = await response.json();
       if (data.d) {
         return data.d.slice(0, MAX_VISIBLE_RESULTS);
       }
     } catch (error) {
-      // NEW: Set an error message if the fetch fails
       console.error('Failed to fetch IMDB suggestions:', error);
       setError('Failed to fetch suggestions. Please try again later.');
     }
@@ -234,8 +231,8 @@ const Search = () => {
 
   const debouncedSearch = useCallback(
     debounce(async (text: string) => {
-      setIsLoading(true); // Start loading
-      setError(''); // Clear previous errors
+      setIsLoading(true);
+      setError('');
       setOmdbResults([]);
       setImdbSuggestions([]);
       setGenreSuggestions([]);
@@ -254,17 +251,24 @@ const Search = () => {
           setGenreMovieSuggestions(moviesForMatchedGenres);
 
           const omdbResults = await searchOMDB(text);
-          const uniqueOmdbResults = omdbResults.reduce((acc, current) => {
-            const x = acc.find(
-              (item: OMDBResult) => item.imdbID === current.imdbID,
-            );
-            if (!x) {
-              return acc.concat([current]);
-            } else {
-              return acc;
-            }
-          }, [] as OMDBResult[]);
-          setOmdbResults(uniqueOmdbResults.slice(0, MAX_VISIBLE_RESULTS));
+
+          // FIX FOR CRASH: Check if omdbResults is a valid array before reducing
+          if (omdbResults && Array.isArray(omdbResults)) {
+            const uniqueOmdbResults = omdbResults.reduce((acc, current) => {
+              const x = acc.find(
+                (item: OMDBResult) => item.imdbID === current.imdbID,
+              );
+              if (!x) {
+                return acc.concat([current]);
+              } else {
+                return acc;
+              }
+            }, [] as OMDBResult[]);
+            setOmdbResults(uniqueOmdbResults.slice(0, MAX_VISIBLE_RESULTS));
+          } else {
+            // If OMDB returns a non-array response (e.g., an error object), clear results
+            setOmdbResults([]);
+          }
 
           const imdbResults = await searchIMDB(text);
           setImdbSuggestions(imdbResults);
@@ -273,7 +277,7 @@ const Search = () => {
         console.error('Search failed:', e);
         setError('An error occurred during the search. Please try again.');
       } finally {
-        setIsLoading(false); // End loading
+        setIsLoading(false);
       }
     }, 300),
     [],
@@ -287,7 +291,7 @@ const Search = () => {
   }, [searchText, debouncedSearch]);
 
   const handleSearch = (text: string) => {
-    saveSearchToHistory(text); // Use the new, consolidated function
+    saveSearchToHistory(text);
     navigation.navigate('SearchResults', {
       filter: text.trim(),
     });
@@ -313,14 +317,12 @@ const Search = () => {
   const showResultsAndSuggestions = isSearching && hasSuggestions;
   const showHistory = !isSearching && searchHistory.length > 0;
 
-  // Combine results and suggestions for a single FlatList. Add a 'type' property to differentiate.
   const combinedData = [
     // Add a header for Genre suggestions if there are any
     ...(genreSuggestions.length > 0
       ? [{id: 'genre-header', type: 'header', title: 'Genres'}]
       : []),
     ...genreSuggestions.map(item => ({...item, type: 'genre'})),
-    // Add a header for genre-specific movies if there are any
     ...(genreMovieSuggestions.length > 0
       ? [
           {
@@ -331,19 +333,17 @@ const Search = () => {
         ]
       : []),
     ...genreMovieSuggestions.map(item => ({...item, type: 'genre-movie'})),
-    // Add a header for IMDB suggestions if there are any
     ...(imdbSuggestions.length > 0
       ? [{id: 'imdb-header', type: 'header', title: 'Suggestions (IMDb)'}]
       : []),
     ...imdbSuggestions.map(item => ({...item, type: 'imdb'})),
-    // Add a header for OMDB results if there are any
     ...(omdbResults.length > 0
       ? [{id: 'omdb-header', type: 'header', title: 'Search Results (OMDB)'}]
       : []),
     ...omdbResults.map(item => ({...item, type: 'omdb'})),
   ];
 
-  const renderItem = ({item, index}) => {
+  const renderItem = ({item, index}: {item: any; index: number}) => {
     if (item.type === 'header') {
       return <RenderHeader title={item.title} index={index} />;
     }
@@ -376,7 +376,6 @@ const Search = () => {
 
   const AnimatedContainer = Animated.View;
 
-  // Refactor the main content block for clarity and to prevent syntax errors
   let contentToRender;
 
   if (isLoading) {
@@ -400,7 +399,7 @@ const Search = () => {
       <FlatList
         data={combinedData}
         keyExtractor={(item, index) =>
-          `${item.type}-${item.id || item.imdbID}-${index}`
+          `${item.type}-${item.id || item.imdbID || item.l}-${index}`
         }
         renderItem={renderItem}
         contentContainerStyle={{paddingTop: 4}}
@@ -472,7 +471,14 @@ const Search = () => {
         entering={FadeInDown.springify()}
         layout={Layout.springify()}
         className="px-4 pt-4">
-        <Text className="text-white text-xl font-bold mb-3">Search</Text>
+        <View className="flex-row justify-between items-center mb-3">
+          <Text className="text-white text-xl font-bold">Search</Text>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('Suggestion')}
+            className="bg-white/5 rounded-full p-2 border border-white/10">
+            <Ionicons name="sparkles-outline" size={20} color={primary} />
+          </TouchableOpacity>
+        </View>
         <View className="flex-row items-center space-x-3 mb-2">
           <View className="flex-1">
             <View className="overflow-hidden rounded-xl bg-[#141414] shadow-lg shadow-black/50">
@@ -485,7 +491,7 @@ const Search = () => {
                   />
                   <TextInput
                     className="flex-1 text-white text-base ml-3"
-                    placeholder="Search anime..."
+                    placeholder="Search anime, movies, series..."
                     placeholderTextColor="#666"
                     value={searchText}
                     onChangeText={setSearchText}
@@ -505,14 +511,8 @@ const Search = () => {
               </View>
             </View>
           </View>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('GenreList')}
-            className="bg-[#141414] rounded-full p-3 border border-white/5">
-            <Ionicons name="grid-outline" size={24} color={primary} />
-          </TouchableOpacity>
         </View>
       </AnimatedContainer>
-
       {/* Search Results and Suggestions */}
       <AnimatedContainer
         layout={Layout.springify()}

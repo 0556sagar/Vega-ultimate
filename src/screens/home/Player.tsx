@@ -62,7 +62,7 @@ const getFastForwardRate = () => {
 // ---------------------------------------------------------------------
 
 // FIX: Changed from 1500ms to 2000ms (2 seconds)
-const FAST_FORWARD_DELAY_MS = 1300;
+const FAST_FORWARD_DELAY_MS = 800;
 
 const Player = ({route}: Props): React.JSX.Element => {
   const {primary} = useThemeStore(state => state);
