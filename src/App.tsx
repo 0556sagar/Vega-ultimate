@@ -395,9 +395,13 @@ function TabStackScreen() {
         tabBarShowLabel: showTabBarLables,
         tabBarStyle: !isLargeScreen
           ? {
-              position: 'absolute',
-              bottom: 0,
-              height: 74, // Use adjusted height
+              // Re-adding absolute positioning properties
+              position: 'absolute', // <--- Re-add
+              bottom: 0, // <--- Re-add
+              left: 0, // <--- Ensure coverage
+              right: 0, // <--- Ensure coverage
+
+              height: 72, // Use adjusted height
               borderRadius: 0,
               overflow: 'hidden',
               elevation: 0,
