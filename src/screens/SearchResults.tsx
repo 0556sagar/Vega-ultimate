@@ -1,9 +1,10 @@
 import {
   SafeAreaView,
-  ScrollView,
   ActivityIndicator,
   Text,
   View,
+  FlatList,
+  ListRenderItem,
 } from 'react-native';
 import Slider from '../components/Slider';
 import React, {useEffect, useState, useRef, useCallback, useMemo} from 'react';
@@ -24,183 +25,167 @@ interface SearchPageData {
   name: string;
 }
 
+// Extract header to a separate component to prevent re-rendering the whole list when loading changes
+const SearchHeader = React.memo(
+  ({
+    filter,
+    isAllLoaded,
+    primary,
+  }: {
+    filter: string;
+    isAllLoaded: boolean;
+    primary: string;
+  }) => (
+    <View className="mt-14 px-4 flex flex-row justify-between items-center gap-x-3 mb-4">
+      <Text className="text-white text-2xl font-semibold ">
+        {isAllLoaded ? 'Searched for' : 'Searching for'}{' '}
+        <Text style={{color: primary}}>"{filter}"</Text>
+      </Text>
+      {!isAllLoaded && (
+        <View className="flex justify-center items-center h-10">
+          <ActivityIndicator size="small" color={primary} animating={true} />
+        </View>
+      )}
+    </View>
+  ),
+);
+
 const SearchResults = ({route}: Props): React.ReactElement => {
   const {primary} = useThemeStore(state => state);
   const {installedProviders} = useContentStore(state => state);
   const [searchData, setSearchData] = useState<SearchPageData[]>([]);
-  // We no longer need to track empty results, as we will not render them.
-  // const [emptyResults, setEmptyResults] = useState<SearchPageData[]>([]);
 
-  const trueLoading = useMemo(
-    () =>
-      installedProviders.map(item => ({
-        name: item.display_name,
-        value: item.value,
-        isLoading: true,
-      })),
-    [installedProviders],
+  // Using a Set or Map for loading states is faster than array.find(),
+  // but strictly for this UI, a simple counter or boolean is often enough.
+  // Keeping your logic but simplified:
+  const [loadingProviders, setLoadingProviders] = useState<Set<string>>(
+    new Set(),
   );
 
-  const [loading, setLoading] = useState(trueLoading);
-  const abortController = useRef<AbortController | null>(null);
-
-  const updateSearchData = useCallback((newData: SearchPageData) => {
-    setSearchData(prev => [...prev, newData]);
-  }, []);
-
-  // Removed updateEmptyResults as we no longer need this state.
-  // const updateEmptyResults = useCallback((newData: SearchPageData) => {
-  //   setEmptyResults(prev => [...prev, newData]);
-  // }, []);
-
-  const updateLoading = useCallback(
-    (value: string, updates: Partial<{isLoading: boolean; error: boolean}>) => {
-      setLoading(prev =>
-        prev.map(i => (i.value === value ? {...i, ...updates} : i)),
-      );
-    },
-    [],
-  );
-
-  const isAllLoaded = useMemo(
-    () => loading.every(i => !i.isLoading),
-    [loading],
-  );
+  // Ref to track mounted state to avoid updating state on unmounted component
+  const isMounted = useRef(true);
 
   useEffect(() => {
-    // Clean up previous controller if exists
-    if (abortController.current) {
-      abortController.current.abort();
-    }
-
-    // Create a new controller for this effect
-    abortController.current = new AbortController();
-    const signal = abortController.current.signal;
-
-    // Reset states when component mounts or filter changes
-    setSearchData([]);
-    // Removed setEmptyResults as we no longer need this state.
-    // setEmptyResults([]);
-    setLoading(trueLoading);
-
-    const fetchPromises: Promise<void>[] = [];
-
-    const getSearchResults = () => {
-      installedProviders.forEach(item => {
-        const fetchPromise = (async () => {
-          try {
-            const data = await providerManager.getSearchPosts({
-              searchQuery: route.params.filter,
-              page: 1,
-              providerValue: item.value,
-              signal: signal,
-            });
-
-            // Skip updating state if request was aborted
-            if (signal.aborted) return;
-
-            // This is the key change: only update searchData if results exist.
-            if (data && data.length > 0) {
-              const newData = {
-                title: item.display_name,
-                Posts: data,
-                filter: route.params.filter,
-                providerValue: item.value,
-                value: item.value,
-                name: item.display_name,
-              };
-              updateSearchData(newData);
-            }
-            // The else block that populated emptyResults has been removed.
-
-            updateLoading(item.value, {isLoading: false});
-          } catch (error) {
-            if (signal.aborted) return;
-
-            console.error(
-              `Error fetching data for ${item.display_name}:`,
-              error,
-            );
-            updateLoading(item.value, {isLoading: false, error: true});
-          }
-        })();
-
-        fetchPromises.push(fetchPromise);
-      });
-
-      // Use Promise.allSettled to handle all promises regardless of their outcome
-      return Promise.allSettled(fetchPromises);
-    };
-
-    getSearchResults();
-
+    isMounted.current = true;
     return () => {
-      // Cleanup function: abort any ongoing API requests
-      if (abortController.current) {
-        abortController.current.abort();
-        abortController.current = null;
+      isMounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const abortController = new AbortController();
+    const signal = abortController.signal;
+
+    // Reset State
+    setSearchData([]);
+
+    // Initialize loading state with all provider values
+    const initialLoading = new Set(installedProviders.map(p => p.value));
+    setLoadingProviders(initialLoading);
+
+    const fetchProviderData = async (item: (typeof installedProviders)[0]) => {
+      try {
+        const data = await providerManager.getSearchPosts({
+          searchQuery: route.params.filter,
+          page: 1,
+          providerValue: item.value,
+          signal: signal,
+        });
+
+        if (signal.aborted || !isMounted.current) return;
+
+        // Mark this specific provider as finished loading immediately
+        setLoadingProviders(prev => {
+          const next = new Set(prev);
+          next.delete(item.value);
+          return next;
+        });
+
+        if (data && data.length > 0) {
+          const newData: SearchPageData = {
+            title: item.display_name,
+            Posts: data,
+            filter: route.params.filter,
+            providerValue: item.value,
+            value: item.value,
+            name: item.display_name,
+          };
+
+          // Functional update to ensure we don't miss concurrent updates
+          setSearchData(prev => [...prev, newData]);
+        }
+      } catch (error) {
+        if (!signal.aborted && isMounted.current) {
+          console.error(`Error fetching ${item.display_name}:`, error);
+          // Even on error, stop loading spinner for this provider
+          setLoadingProviders(prev => {
+            const next = new Set(prev);
+            next.delete(item.value);
+            return next;
+          });
+        }
       }
     };
-  }, [
-    route.params.filter,
-    trueLoading,
-    installedProviders,
-    updateSearchData,
-    // updateEmptyResults, // Removed this dependency
-    updateLoading,
-  ]);
 
-  const renderSlider = useCallback(
-    (item: SearchPageData) => {
-      const loadingState = loading.find(i => i.value === item.value);
-      const posts = searchData.find(i => i.providerValue === item.value)?.Posts || [];
+    // Trigger all fetches in parallel
+    installedProviders.forEach(item => {
+      fetchProviderData(item);
+    });
+
+    return () => {
+      abortController.abort();
+    };
+  }, [route.params.filter, installedProviders]);
+
+  const renderItem: ListRenderItem<SearchPageData> = useCallback(
+    ({item}) => {
+      // Logic Fix: No need to search 'searchData' or 'loading' arrays here.
+      // 'item' already contains the Posts.
+      // We pass specific loading state if needed, or just false since we only render results when data exists.
 
       return (
-        <Slider
-          isLoading={loadingState?.isLoading || false}
-          key={`${item.value}-data`}
-          title={item.name}
-          posts={posts}
-          filter={route.params.filter}
-          providerValue={item.value}
-          isSearch={true}
-        />
+        <View className="mb-4">
+          <Slider
+            isLoading={false} // Data is present, so it's not loading anymore
+            key={`${item.value}-slider`}
+            title={item.name}
+            posts={item.Posts}
+            filter={route.params.filter}
+            providerValue={item.value}
+            isSearch={true}
+          />
+        </View>
       );
     },
-    [loading, searchData, route.params.filter],
+    [route.params.filter],
   );
 
-  // The emptySliders useMemo has been removed as we no longer need to render it.
-  const searchSliders = useMemo(
-    () => searchData.map(item => renderSlider(item)),
-    [searchData, renderSlider],
-  );
+  const isAllLoaded = loadingProviders.size === 0;
 
   return (
     <SafeAreaView className="bg-black h-full w-full">
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <View className="mt-14 px-4 flex flex-row justify-between items-center gap-x-3">
-          <Text className="text-white text-2xl font-semibold ">
-            {isAllLoaded ? 'Searched for' : 'Searching for'}{' '}
-            <Text style={{color: primary}}>"{route?.params?.filter}"</Text>
-          </Text>
-          {!isAllLoaded && (
-            <View className="flex justify-center items-center h-20">
-              <ActivityIndicator
-                size="small"
-                color={primary}
-                animating={true}
-              />
-            </View>
-          )}
-        </View>
-
-        <View className="px-4">
-          {searchSliders}
-          {/* We now only render searchSliders, which only contain results from providers with content. */}
-        </View>
-        <View className="h-16" />
-      </ScrollView>
+      <FlatList
+        data={searchData}
+        renderItem={renderItem}
+        keyExtractor={item => item.value}
+        showsVerticalScrollIndicator={false}
+        // Header Component containing the title and global loader
+        ListHeaderComponent={
+          <SearchHeader
+            filter={route.params.filter}
+            isAllLoaded={isAllLoaded}
+            primary={primary}
+          />
+        }
+        // Padding for the bottom
+        ListFooterComponent={<View className="h-16" />}
+        contentContainerStyle={{paddingHorizontal: 16}}
+        // Performance settings for FlatList
+        initialNumToRender={3}
+        maxToRenderPerBatch={5}
+        windowSize={5}
+        removeClippedSubviews={true}
+      />
     </SafeAreaView>
   );
 };
