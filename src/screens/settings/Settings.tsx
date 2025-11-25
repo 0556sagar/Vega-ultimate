@@ -45,7 +45,7 @@ import useAppModeStore from '../../lib/zustand/appModeStore';
 
 type Props = NativeStackScreenProps<SettingsStackParamList, 'Settings'>;
 
-// Notification permission component (kept for completeness)
+// Notification permission component
 const NotificationPrompt = () => {
   const [permissionStatus, setPermissionStatus] = useState<RESULTS | null>(
     null,
@@ -69,7 +69,7 @@ const NotificationPrompt = () => {
   };
 
   if (permissionStatus === RESULTS.GRANTED || permissionStatus === null) {
-    return null; // Don't show anything if permission is granted or not yet checked
+    return null;
   }
 
   return (
@@ -102,11 +102,10 @@ const NotificationPrompt = () => {
   );
 };
 
-// --- WATCH TOGETHER PERSISTENCE (Matches Player.tsx KEY) ---
+// --- WATCH TOGETHER PERSISTENCE ---
 const KEY_WATCH_TOGETHER = 'watchTogetherMode';
 
 const getWatchTogetherMode = () => {
-  // Uses cacheStorageService, as cacheStorage is likely an instance of cacheStorageService
   const modeStr = cacheStorageService.getString(KEY_WATCH_TOGETHER);
   return modeStr === 'true' ? true : false;
 };
@@ -116,7 +115,7 @@ const setWatchTogetherModeStorage = (mode: boolean) => {
 };
 // -----------------------------------------------------------
 
-// Helper for Internal Navigation (Chevron icon)
+// Helper for Internal Navigation
 type IconElement = React.ReactElement<{
   size?: number;
   color?: string;
@@ -154,7 +153,7 @@ const InternalOptionRow = React.memo(
   ),
 );
 
-// Helper for External Links (External-link icon)
+// Helper for External Links
 const ExternalLinkRow = React.memo(
   ({
     icon,
@@ -190,7 +189,7 @@ const Settings = ({navigation}: Props) => {
   const tabNavigation =
     useNavigation<NativeStackNavigationProp<TabStackParamList>>();
   const rootNavigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>(); // For navigating to Player
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const {primary} = useThemeStore(state => state);
   const {provider, setProvider, installedProviders} = useContentStore(
     state => state,
@@ -198,12 +197,10 @@ const Settings = ({navigation}: Props) => {
   const {clearHistory} = useWatchHistoryStore(state => state);
   const {appMode, setAppMode} = useAppModeStore(state => state);
 
-  // --- NEW WATCH TOGETHER STATES ---
   const [watchTogetherMode, setWatchTogetherMode] = useState(
     getWatchTogetherMode(),
   );
-  const [syncLink, setSyncLink] = useState(''); // State for the link input
-  // ---------------------------------
+  const [syncLink, setSyncLink] = useState('');
 
   const handleProviderSelect = useCallback(
     (item: ProviderExtension) => {
@@ -280,7 +277,6 @@ const Settings = ({navigation}: Props) => {
     clearHistory();
   }, [clearHistory]);
 
-  // --- NEW WATCH TOGETHER HANDLERS ---
   const toggleWatchTogether = useCallback(() => {
     const newState = !watchTogetherMode;
     setWatchTogetherMode(newState);
@@ -294,19 +290,35 @@ const Settings = ({navigation}: Props) => {
     }
   }, [watchTogetherMode]);
 
+  // --- UPDATED PARSING LOGIC TO PREVENT CRASH ---
   const parseSyncLink = (link: string) => {
-    // FIX: Updated regex to allow any character that is NOT '&' or a newline,
-    // ensuring the entire content URL is captured for video_id.
-    const videoIdMatch = link.match(/video_id=([^&\n]+)/i);
-    const timeMatch = link.match(/time=(\d+)/i);
+    // Helper to extract value by key from a complex URL string
+    const getParam = (key: string) => {
+      // Matches key=value up to the next & or end of string
+      const regex = new RegExp(`${key}=([^&\\n]+)`, 'i');
+      const match = link.match(regex);
+      return match ? match[1] : null;
+    };
 
-    const videoId = videoIdMatch ? videoIdMatch[1] : null;
-    const time = timeMatch ? parseInt(timeMatch[1], 10) : null;
+    const videoId = getParam('video_id');
+    const time = getParam('time');
+    const roomId = getParam('roomId');
+    const leader = getParam('leader');
+    const infoUrl = getParam('infoUrl');
+    const providerValue = getParam('providerValue');
+    const primaryTitle = getParam('primaryTitle');
 
     if (videoId && time !== null) {
       return {
-        videoId: videoId,
-        time: time,
+        videoId,
+        time: parseInt(time, 10),
+        roomId,
+        leader,
+        infoUrl,
+        providerValue,
+        primaryTitle: primaryTitle
+          ? decodeURIComponent(primaryTitle)
+          : 'Shared Content',
       };
     }
     return null;
@@ -322,83 +334,64 @@ const Settings = ({navigation}: Props) => {
       return;
     }
 
-    // ⭐ CRITICAL FIX: Ensure a provider is selected before attempting to join a session.
-    if (!provider || !provider.value) {
-      ToastAndroid.show(
-        'Please select a Content Provider before joining a session.',
-        ToastAndroid.LONG,
-      );
-      return;
-    }
-
     const parsedData = parseSyncLink(linkToJoin);
 
     if (parsedData) {
-      // ✅ FIX: Mock necessary player parameters for navigation, including the provider,
-      // and ensure a more complete item structure to prevent deep-nested crashes.
+      // Robust Mock Params for Player
       const mockPlayerParams = {
-        // 'id' is often the unique ID for the video entry.
         id: parsedData.videoId,
-        primaryTitle: 'Watch Together Session',
-        // ⭐ CRASH FIX: Player screen often expects 'title' as a primary property.
-        title: 'Watch Together Session', // <--- ADDED FIX
-        // 'link' is the source URL for the stream.
+        // CRITICAL: Pass title from link or fallback
+        primaryTitle: parsedData.primaryTitle,
+        title: parsedData.primaryTitle,
         link: parsedData.videoId,
         poster: {logo: 'mock_poster_url'},
         linkIndex: 0,
-        episodeList: [{link: parsedData.videoId, title: 'Synchronized Video'}],
+        episodeList: [
+          {link: parsedData.videoId, title: parsedData.primaryTitle},
+        ],
 
-        // **CRITICAL FIX**: Pass the required provider object.
-        // Explicitly create a ProviderExtension object to ensure all expected properties are present.
+        // CRITICAL: Pass the provider value from the link so Player uses the correct extractor
+        providerValue: parsedData.providerValue || provider.value,
+        infoUrl: parsedData.infoUrl,
+
+        // Pass the fallback provider object to satisfy TS, but providerValue above takes precedence in Player
         provider: {
-          value: provider.value,
+          value: parsedData.providerValue || provider.value,
           type: provider.type,
           display_name: provider.display_name,
           icon: provider.icon,
         } as ProviderExtension,
 
-        // **POTENTIAL CRASH FIX**: Add other properties the Player might expect, if any.
-        // Assuming 'Player' expects a 'type' (Movie/TV) on the item being passed.
-        type: 'Movie', // Use a default type, adjust based on your Player's expectation
+        type: 'Movie',
 
-        // Crucial Watch Together parameters:
+        // Watch Together Specifics
         initialSeekTime: parsedData.time,
-        syncLink: linkToJoin,
+        syncLink: true, // Boolean true to trigger join logic
+        roomId: parsedData.roomId, // CRITICAL: Must pass this!
+        leader: parsedData.leader,
+        time: parsedData.time,
       };
 
       try {
-        // Navigate to Player, casting the parameters to bypass local type checks
-        rootNavigation.navigate(
-          'Player' as never, // Assuming 'Player' is the key in RootStackParamList
-          mockPlayerParams as never,
-        );
+        rootNavigation.navigate('Player' as never, mockPlayerParams as never);
 
-        // Clear the link input after successful attempt
         setSyncLink('');
         ToastAndroid.show(
-          `Joining session for video... at ${parsedData.time}s`,
+          `Joining session at ${parsedData.time}s`,
           ToastAndroid.LONG,
         );
       } catch (error) {
-        // Added a catch block to log and display any navigation error
         console.error('Navigation Crash Error:', error);
-        ToastAndroid.show(
-          'Failed to join session. Check console for specific error details.',
-          ToastAndroid.LONG,
-        );
+        ToastAndroid.show('Failed to join session.', ToastAndroid.LONG);
       }
     } else {
-      ToastAndroid.show(
-        'Invalid sync link format. Expected: vegaNext://watch/video_id=...&time=...',
-        ToastAndroid.LONG,
-      );
+      ToastAndroid.show('Invalid sync link format.', ToastAndroid.LONG);
     }
   }, [syncLink, rootNavigation, provider]);
 
   const handlePasteLink = useCallback(async () => {
     try {
       const text = await Clipboard.getString();
-      // FIX: Check for the new parameters
       if (text && text.includes('video_id=') && text.includes('time=')) {
         setSyncLink(text);
         ToastAndroid.show(
@@ -406,16 +399,12 @@ const Settings = ({navigation}: Props) => {
           ToastAndroid.SHORT,
         );
       } else {
-        ToastAndroid.show(
-          'No valid sync link (vegaNext://watch/video_id=...&time=...) found in clipboard.',
-          ToastAndroid.SHORT,
-        );
+        ToastAndroid.show('No valid sync link found.', ToastAndroid.SHORT);
       }
     } catch (error) {
       ToastAndroid.show('Failed to read from clipboard.', ToastAndroid.SHORT);
     }
   }, []);
-  // -----------------------------------
 
   const AnimatedSection = ({
     delay,
@@ -449,12 +438,10 @@ const Settings = ({navigation}: Props) => {
           <Text className="text-2xl font-bold text-white mb-6">Settings</Text>
         </Animated.View>
 
-        {/* App Mode Section (delay 50) */}
         <AnimatedSection delay={50}>
           <View className="mb-6 flex-col gap-3">
             <Text className="text-gray-400 text-sm mb-1">App Mode</Text>
             <View className="bg-[#1A1A1A] rounded-xl overflow-hidden">
-              {/* Vega-TV Mode Switch */}
               <View className="flex-row items-center justify-between p-4">
                 <View className="flex-row items-center">
                   <MaterialCommunityIcons
@@ -487,13 +474,11 @@ const Settings = ({navigation}: Props) => {
           </View>
         </AnimatedSection>
 
-        {/* Notification Section (delay 100) */}
         <AnimatedSection delay={100}>
           <Text className="text-gray-400 text-sm mb-3 ml-5">Notifications</Text>
           <NotificationPrompt />
         </AnimatedSection>
 
-        {/* Content provider section (only visible in video mode) (delay 150) */}
         {appMode === 'video' && (
           <AnimatedSection delay={150}>
             <View className="mb-6 flex-col gap-3">
@@ -515,7 +500,6 @@ const Settings = ({navigation}: Props) => {
                   )}
                 </ScrollView>
               </View>
-              {/* Extensions */}
               <View className="bg-[#1A1A1A] rounded-xl overflow-hidden mb-3">
                 <InternalOptionRow
                   icon={<MaterialCommunityIcons name="puzzle" />}
@@ -529,12 +513,11 @@ const Settings = ({navigation}: Props) => {
           </AnimatedSection>
         )}
 
-        {/* Watch Together Section (NEW) (delay 200) */}
+        {/* Watch Together Section */}
         <AnimatedSection delay={200}>
           <View className="mb-6 flex-col gap-3">
             <Text className="text-gray-400 text-sm mb-1">Watch Together</Text>
             <View className="bg-[#1A1A1A] rounded-xl overflow-hidden">
-              {/* Watch Together Mode Switch */}
               <View className="flex-row items-center justify-between p-4 border-b border-[#262626]">
                 <View className="flex-row items-center">
                   <MaterialIcons name="group" size={22} color={primary} />
@@ -551,7 +534,6 @@ const Settings = ({navigation}: Props) => {
                 />
               </View>
 
-              {/* Join Session Input/Button (Conditional) */}
               {watchTogetherMode && (
                 <View className="flex-col p-4">
                   <Text className="text-gray-400 text-sm mb-2">
@@ -560,8 +542,7 @@ const Settings = ({navigation}: Props) => {
                   <View className="flex-row items-center">
                     <TextInput
                       className="flex-1 bg-white/10 text-white rounded-l-md p-2 h-10"
-                      // FIX: Updated placeholder to match the generated link format
-                      placeholder="e.g., app://watch/video_id=...&time=..."
+                      placeholder="e.g., vegaNext://watch/video_id=..."
                       placeholderTextColor="#9CA3AF"
                       value={syncLink}
                       onChangeText={setSyncLink}
@@ -590,38 +571,29 @@ const Settings = ({navigation}: Props) => {
             </View>
           </View>
         </AnimatedSection>
-        {/* End Watch Together Section */}
 
-        {/* Main options section (delay 250) */}
         <AnimatedSection delay={250}>
           <View className="mb-6">
             <Text className="text-gray-400 text-sm mb-3">Options</Text>
             <View className="bg-[#1A1A1A] rounded-xl overflow-hidden">
-              {/* Downloads */}
               <InternalOptionRow
                 icon={<MaterialCommunityIcons name="folder-download" />}
                 text="Downloads"
                 onPress={() => navigation.navigate('Downloads')}
                 primaryColor={primary}
               />
-
-              {/* Subtitle Style */}
               <InternalOptionRow
                 icon={<MaterialCommunityIcons name="subtitles" />}
                 text="Subtitle Style"
                 onPress={() => navigation.navigate('SubTitlesPreferences')}
                 primaryColor={primary}
               />
-
-              {/* Watch History */}
               <InternalOptionRow
                 icon={<MaterialCommunityIcons name="history" />}
                 text="Watch History"
                 onPress={() => navigation.navigate('WatchHistoryStack')}
                 primaryColor={primary}
               />
-
-              {/* Preferences */}
               <InternalOptionRow
                 icon={<MaterialIcons name="room-preferences" />}
                 text="Preferences"
@@ -633,12 +605,10 @@ const Settings = ({navigation}: Props) => {
           </View>
         </AnimatedSection>
 
-        {/* Data Management section (delay 350) */}
         <AnimatedSection delay={350}>
           <View className="mb-6">
             <Text className="text-gray-400 text-sm mb-3">Data Management</Text>
             <View className="bg-[#1A1A1A] rounded-xl overflow-hidden">
-              {/* Clear Cache */}
               <View className="flex-row items-center justify-between p-4 border-b border-[#262626]">
                 <Text className="text-white text-base">Clear Cache</Text>
                 <TouchableOpacity
@@ -652,7 +622,6 @@ const Settings = ({navigation}: Props) => {
                 </TouchableOpacity>
               </View>
 
-              {/* Clear Watch History */}
               <View className="flex-row items-center justify-between p-4">
                 <Text className="text-white text-base">
                   Clear Watch History
@@ -671,49 +640,39 @@ const Settings = ({navigation}: Props) => {
           </View>
         </AnimatedSection>
 
-        {/* About & GitHub section (delay 450) */}
         <AnimatedSection delay={450}>
           <View className="mb-6">
             <Text className="text-gray-400 text-sm mb-3">About</Text>
             <View className="bg-[#1A1A1A] rounded-xl overflow-hidden">
-              {/* About */}
               <InternalOptionRow
                 icon={<Feather name="info" />}
                 text="About"
                 onPress={() => navigation.navigate('About')}
                 primaryColor={primary}
               />
-
-              {/* GitHub */}
               <ExternalLinkRow
                 icon={<AntDesign name="github" />}
-                text="Give a star ⭐"
+                text="Give a star"
                 url="https://github.com/DHR-Store/Vega-Next"
                 iconColor={primary}
               />
-
-              {/* Error and Suggestions */}
               <ExternalLinkRow
                 icon={<AntDesign name="info" />}
                 text="Error and Suggestions"
                 url="https://radio-nu-five.vercel.app/"
                 iconColor={primary}
               />
-
-              {/* Kreate */}
               <ExternalLinkRow
                 icon={<Feather name="music" />}
                 text="Kreate"
                 url="https://kreate-that.vercel.app/"
-                iconColor="white" // Keep original color
+                iconColor="white"
               />
-
-              {/* sponsore */}
               <ExternalLinkRow
                 icon={<AntDesign name="heart" />}
                 text="Go to DHR-Store"
                 url="https://dhr-store.vercel.app/"
-                iconColor="#ff69b4" // Keep original color
+                iconColor="#ff69b4"
                 isLast={true}
               />
             </View>
