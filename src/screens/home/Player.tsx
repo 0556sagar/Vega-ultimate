@@ -13,7 +13,7 @@ import {
   TextInput,
   Clipboard,
   KeyboardAvoidingView,
-  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -66,16 +66,16 @@ interface FirebaseConfig {
   [key: string]: any;
 }
 
-// --- FALLBACK CONFIGURATION --- only for test purpos
+// --- FALLBACK CONFIGURATION ---
 const FALLBACK_FIREBASE_CONFIG: FirebaseConfig = {
-  apiKey: 'AIzaSyAesuaUddC4aXL..........',
-  authDomain: 'together.........com',
-  databaseURL: 'Your_Firebase_Database_URL',
-  projectId: 'Your_Firebase_Project_ID',
-  storageBucket: 'your-project-id.appspot.com',
-  messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
-  appId: 'YOUR_APP_ID',
-  measurementId: 'YOUR_MEASUREMENT_ID',
+  apiKey: 'AIzaSyAesuaUddC4aXLjyMRl7VpFG2-0R36exRU',
+  authDomain: 'together-5dde5.firebaseapp.com',
+  databaseURL: 'https://together-5dde5-default-rtdb.firebaseio.com',
+  projectId: 'together-5dde5',
+  storageBucket: 'together-5dde5.appspot.com',
+  messagingSenderId: '435182801394',
+  appId: '1:435182801394:web:9e283ba6c8949aa70d9b6b',
+  measurementId: 'G-ZM6BDPE2M2',
 };
 
 // --- UTILITY FOR SANITIZING FIREBASE KEYS ---
@@ -89,6 +89,16 @@ const sanitizeFirebaseKey = (key: string): string => {
     .replace(/\]/g, '(RBRACKET)')
     .replace(/\//g, '(SLASH)')
     .trim();
+};
+
+const generateRandomId = (length: number = 6) => {
+  const chars =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
 };
 
 // --- ROBUST BASE64 IMPLEMENTATION ---
@@ -173,6 +183,7 @@ const KEY_SKIP_INTRO = 'autoSkipIntro';
 const KEY_SKIP_DURATION = 'skipIntroDuration';
 const KEY_WATCH_TOGETHER = 'watchTogetherMode';
 const KEY_USER_NICKNAME = 'userNickname';
+const KEY_USER_PASSWORD = 'userPassword';
 
 // --- INITIAL SETTINGS CONSTANTS ---
 const DEFAULT_FF_RATE = 2.0;
@@ -208,6 +219,10 @@ const getUserNickname = (): string => {
   return cacheStorage.getString(KEY_USER_NICKNAME) || '';
 };
 
+const getUserPassword = (): string => {
+  return cacheStorage.getString(KEY_USER_PASSWORD) || '';
+};
+
 // --- REALTIME SYNC HOOK ---
 interface ChatMessage {
   userId: string;
@@ -222,17 +237,6 @@ interface SyncData {
   isPlaying: boolean;
 }
 
-// Simple hash for password demo (in production use a crypto library)
-const simpleHash = (str: string) => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return hash.toString();
-};
-
 const useRealtimeSync = (
   sessionId: string,
   isEnabled: boolean,
@@ -246,6 +250,7 @@ const useRealtimeSync = (
   );
   const [configLoading, setConfigLoading] = useState(true);
 
+  // Sanitized Session ID (Room ID)
   const safeSessionId = useMemo(
     () => sanitizeFirebaseKey(sessionId),
     [sessionId],
@@ -256,7 +261,7 @@ const useRealtimeSync = (
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
-        // your owen Pusher or websocket and firebase server URL
+
         const res = await fetch('https://firebase-config-server.vercel.app', {
           signal: controller.signal,
           headers: {'Cache-Control': 'no-cache'},
@@ -305,52 +310,6 @@ const useRealtimeSync = (
     }
   }, [otherUserNicknameHint]);
 
-  // --- AUTHENTICATE USER FUNCTION ---
-  // Returns: { success: boolean, error?: string, isNew?: boolean }
-  const authenticateUser = useCallback(
-    async (nickname: string, password: string) => {
-      if (!firebaseConfig?.databaseURL) {
-        return {success: false, error: 'Database connecting...'};
-      }
-      const cleanName = sanitizeFirebaseKey(nickname);
-      const userUrl = `${firebaseConfig.databaseURL}/users/${cleanName}.json`;
-      const hashedPassword = simpleHash(password);
-
-      try {
-        // 1. Check if user exists
-        const res = await fetch(userUrl);
-        const data = await res.json();
-
-        if (data && data.password) {
-          // User exists, verify password
-          if (data.password === hashedPassword) {
-            return {success: true, isNew: false};
-          } else {
-            return {
-              success: false,
-              error: 'Nickname taken. Incorrect password.',
-            };
-          }
-        } else {
-          // User does not exist, create new
-          await fetch(userUrl, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              password: hashedPassword,
-              created: Date.now(),
-            }),
-          });
-          return {success: true, isNew: true};
-        }
-      } catch (err: any) {
-        return {success: false, error: err.message || 'Connection failed'};
-      }
-    },
-    [firebaseConfig],
-  );
-
-  // --- PROCESS CHAT DATA FUNCTION ---
   const processChatData = useCallback(
     (data: any) => {
       if (!data) return;
@@ -368,7 +327,6 @@ const useRealtimeSync = (
 
       const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
 
-      // --- AUTO-DISCOVERY (BI-DIRECTIONAL) ---
       if (!syncedOtherUser) {
         const possiblePartner = sortedMessages.find(
           m => m.userId !== localNickname,
@@ -378,16 +336,8 @@ const useRealtimeSync = (
         }
       }
 
-      // --- FILTER MESSAGES ---
-      const filteredMessages = sortedMessages.filter(msg => {
-        if (msg.userId === localNickname) return true;
-        if (syncedOtherUser && msg.userId === syncedOtherUser) return true;
-        if (!syncedOtherUser && msg.userId !== localNickname) return true;
-        return false;
-      });
-
       setChatLog(
-        filteredMessages.map(msg =>
+        sortedMessages.map(msg =>
           msg.userId === localNickname
             ? `You: ${msg.message}`
             : `${msg.userId}: ${msg.message}`,
@@ -459,7 +409,6 @@ const useRealtimeSync = (
             setRemoteTime(data.time);
             setRemoteIsPlaying(data.isPlaying);
             setIsReceivingUpdates(true);
-
             if (!syncedOtherUser) {
               setSyncedOtherUser(data.userId);
             }
@@ -498,7 +447,6 @@ const useRealtimeSync = (
   const sendChat = useCallback(
     async (message: string) => {
       if (!chatRef) return;
-
       setChatLog(prev => [...prev, `You: ${message}`]);
       const encodedMessage = base64Encode(message);
       const chatMessage: ChatMessage = {
@@ -561,8 +509,8 @@ const useRealtimeSync = (
     syncedOtherUser,
     safeSessionId,
     configLoading,
+    firebaseConfig,
     snapToLeader,
-    authenticateUser,
   };
 };
 
@@ -574,8 +522,7 @@ interface NicknameOverlayProps {
   currentPassword: string;
   setPassword: (pass: string) => void;
   onConfirm: () => void;
-  isLoading?: boolean;
-  onCancel: () => void;
+  isAuthenticating: boolean;
 }
 
 const NicknameInputOverlay = ({
@@ -585,8 +532,7 @@ const NicknameInputOverlay = ({
   currentPassword,
   setPassword,
   onConfirm,
-  isLoading,
-  onCancel,
+  isAuthenticating,
 }: NicknameOverlayProps) => {
   return (
     <KeyboardAvoidingView
@@ -594,62 +540,51 @@ const NicknameInputOverlay = ({
       className="absolute top-0 left-0 right-0 bottom-0 z-[100] bg-black/80 justify-center items-center">
       <View className="bg-zinc-800 p-6 rounded-xl w-[80%] max-w-[400px]">
         <Text className="text-white text-xl font-bold mb-2 text-center">
-          Watch Party Login
+          Watch Together Profile
         </Text>
-        <Text className="text-gray-400 text-xs mb-4 text-center">
-          Enter a unique nickname. If it exists, enter the password to log in.
-          If it's new, set a password to reserve it.
+        <Text className="text-gray-300 text-sm mb-4 text-center">
+          Secure your nickname with a password to prevent others from using it.
         </Text>
 
-        <Text className="text-gray-300 text-sm mb-1 ml-1">Nickname</Text>
+        <Text className="text-gray-400 text-xs ml-1 mb-1">Nickname</Text>
         <TextInput
           className="w-full bg-zinc-700 text-white rounded-lg p-3 text-base mb-3"
-          placeholder="e.g., MovieFan_77"
+          placeholder="Enter nickname (e.g., 'Neo')"
           placeholderTextColor="#A1A1AA"
           value={currentNickname}
           onChangeText={setNickname}
           maxLength={20}
-          autoCapitalize="none"
+          editable={!isAuthenticating}
         />
 
-        <Text className="text-gray-300 text-sm mb-1 ml-1">Password</Text>
+        <Text className="text-gray-400 text-xs ml-1 mb-1">Password</Text>
         <TextInput
           className="w-full bg-zinc-700 text-white rounded-lg p-3 text-base mb-6"
-          placeholder="Secure your nickname"
+          placeholder="Enter password"
           placeholderTextColor="#A1A1AA"
           value={currentPassword}
           onChangeText={setPassword}
           secureTextEntry={true}
-          maxLength={20}
+          editable={!isAuthenticating}
         />
 
         <TouchableOpacity
           onPress={onConfirm}
           disabled={
             currentNickname.trim().length < 3 ||
-            currentPassword.length < 3 ||
-            isLoading
+            currentPassword.length < 1 ||
+            isAuthenticating
           }
-          className="w-full rounded-lg p-3 items-center mb-3"
+          className="w-full rounded-lg p-3 items-center"
           style={{
             backgroundColor:
-              currentNickname.trim().length >= 3 && currentPassword.length >= 3
+              currentNickname.trim().length >= 3 && currentPassword.length >= 1
                 ? primary
                 : '#3F3F46',
           }}>
-          {isLoading ? (
-            <ActivityIndicator size="small" color="white" />
-          ) : (
-            <Text className="text-white text-lg font-semibold">
-              Login / Register
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={onCancel}
-          className="w-full rounded-lg p-2 items-center">
-          <Text className="text-gray-400 text-sm">Cancel</Text>
+          <Text className="text-white text-lg font-semibold">
+            {isAuthenticating ? 'Verifying...' : 'Confirm Identity'}
+          </Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -673,7 +608,7 @@ const Player = ({route}: Props): React.JSX.Element => {
   const touchStartYRef = useRef(0);
   const isMovingRef = useRef(false);
 
-  // Shared values for animations
+  // Animations
   const loadingOpacity = useSharedValue(0);
   const loadingScale = useSharedValue(0.8);
   const loadingRotation = useSharedValue(0);
@@ -717,13 +652,11 @@ const Player = ({route}: Props): React.JSX.Element => {
   const initialActiveEpisode = useMemo(() => {
     const fromList = route.params?.episodeList?.[route.params.linkIndex];
     if (fromList) return fromList;
-
     const link = route.params?.link || route.params?.video_id;
     if (link) {
       const titleFromLink = route.params?.primaryTitle
         ? decodeURIComponent(route.params.primaryTitle)
         : route.params?.title || 'Shared Video';
-
       return {
         title: titleFromLink,
         link: link,
@@ -813,19 +746,30 @@ const Player = ({route}: Props): React.JSX.Element => {
   const hasSkippedIntroRef = useRef(false);
   const lastActiveEpisodeRef = useRef(activeEpisode?.link);
 
+  // --- WATCH TOGETHER STATE ---
   const [watchTogetherMode, setWatchTogetherModeState] = useState(
     getWatchTogetherMode(),
   );
   const [showChatOverlay, setShowChatOverlay] = useState(false);
   const [isSessionLeader, setIsSessionLeader] = useState(true);
   const [isPlaying, setIsPlaying] = useState(true);
-  const [userNickname, setUserNickname] = useState(getUserNickname());
-  const [userPassword, setUserPassword] = useState('');
-  const [showNicknameModal, setShowNicknameModal] = useState(false);
-  const [authLoading, setAuthLoading] = useState(false);
-  const [chatMessage, setChatMessage] = useState('');
 
+  // IDENTITY
+  const [userNickname, setUserNickname] = useState(getUserNickname());
+  const [userPassword, setUserPassword] = useState(getUserPassword());
+  const [showNicknameModal, setShowNicknameModal] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+  const [chatMessage, setChatMessage] = useState('');
   const [isSyncingVideo, setIsSyncingVideo] = useState(false);
+
+  // --- ROOM ID MANAGEMENT (ISOLATION) ---
+  const [roomId, setRoomId] = useState<string | null>(
+    route.params?.roomId ? decodeURIComponent(route.params.roomId) : null,
+  );
+
+  const videoId =
+    route.params?.link || route.params?.video_id || activeEpisode?.link || '';
 
   const otherUserNicknameFromLink = useMemo(() => {
     const leaderNickname = route.params?.leader;
@@ -835,22 +779,8 @@ const Player = ({route}: Props): React.JSX.Element => {
     return '';
   }, [route.params?.syncLink, route.params?.leader]);
 
-  const setWatchTogetherMode = useCallback(
-    (mode: boolean) => {
-      if (mode && !userNickname) {
-        setShowNicknameModal(true);
-        return;
-      }
-      setWatchTogetherModeState(mode);
-      cacheStorage.setString(KEY_WATCH_TOGETHER, String(mode));
-      if (mode) setIsSessionLeader(true);
-      if (!mode) setIsSyncingVideo(false);
-    },
-    [userNickname],
-  );
-
-  const videoId =
-    route.params?.link || route.params?.video_id || activeEpisode?.link || '';
+  // --- SYNC HOOK INIT ---
+  const currentSyncKey = watchTogetherMode && roomId ? roomId : '';
 
   const {
     chatLog,
@@ -861,12 +791,11 @@ const Player = ({route}: Props): React.JSX.Element => {
     isReceivingUpdates,
     userNickname: syncedUserNickname,
     syncedOtherUser,
-    safeSessionId,
-    configLoading,
+    firebaseConfig,
     snapToLeader,
-    authenticateUser,
+    configLoading, // <--- FIXED: ADDED HERE
   } = useRealtimeSync(
-    videoId,
+    currentSyncKey,
     watchTogetherMode,
     isSessionLeader,
     userNickname,
@@ -874,64 +803,112 @@ const Player = ({route}: Props): React.JSX.Element => {
     isSyncingVideo,
   );
 
-  const handleSetNickname = useCallback(
-    async (nickname: string, password: string, isJoining: boolean = false) => {
-      const trimmedName = nickname.trim();
-      const trimmedPass = password.trim();
+  const setWatchTogetherMode = useCallback(
+    (mode: boolean) => {
+      if (mode) {
+        // Validation check
+        if (!userNickname || !userPassword) {
+          setShowNicknameModal(true);
+          return;
+        }
+        // If enabling and NO room ID exists, generate a NEW private room
+        if (!roomId) {
+          const newRoomId = `${sanitizeFirebaseKey(
+            videoId,
+          )}_${generateRandomId()}`;
+          setRoomId(newRoomId);
+        }
+      }
+      setWatchTogetherModeState(mode);
+      cacheStorage.setString(KEY_WATCH_TOGETHER, String(mode));
+      if (mode) setIsSessionLeader(true);
+      if (!mode) setIsSyncingVideo(false);
+    },
+    [userNickname, userPassword, roomId, videoId],
+  );
 
-      if (trimmedName.length < 3) {
+  // --- AUTH HANDLER ---
+  const handleSetIdentity = useCallback(
+    async (
+      nick: string,
+      pass: string,
+      isJoining: boolean = false,
+      forcedRoomId: string | null = null,
+    ) => {
+      if (!firebaseConfig?.databaseURL) {
         ToastAndroid.show(
-          'Nickname must be at least 3 characters.',
+          'Sync server not ready. Try again.',
           ToastAndroid.SHORT,
         );
-        return;
+        return false;
       }
-      if (trimmedPass.length < 3) {
-        ToastAndroid.show(
-          'Password must be at least 3 characters.',
-          ToastAndroid.SHORT,
-        );
-        return;
-      }
+      setIsAuthenticating(true);
+      const safeNick = sanitizeFirebaseKey(nick.trim());
+      const userRef = `${firebaseConfig.databaseURL}/users/${safeNick}.json`;
 
-      setAuthLoading(true);
-      const authResult = await authenticateUser(trimmedName, trimmedPass);
-      setAuthLoading(false);
+      try {
+        const response = await fetch(userRef);
+        const userData = await response.json();
 
-      if (!authResult.success) {
-        ToastAndroid.show(
-          authResult.error || 'Authentication failed',
-          ToastAndroid.LONG,
-        );
-        return;
-      }
+        let authSuccess = false;
 
-      setUserNickname(trimmedName);
-      cacheStorage.setString(KEY_USER_NICKNAME, trimmedName);
-      // Optional: Cache password if you want persistent login (security risk for plain storage)
-      // cacheStorage.setString('userPassword', trimmedPass);
-      setShowNicknameModal(false);
+        if (userData && userData.password) {
+          // User exists, check password
+          if (userData.password === pass.trim()) {
+            authSuccess = true;
+          } else {
+            Alert.alert(
+              'Authentication Failed',
+              'Nickname is already taken and password does not match.',
+            );
+          }
+        } else {
+          // Register new user
+          await fetch(userRef, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              password: pass.trim(),
+              createdAt: Date.now(),
+            }),
+          });
+          authSuccess = true;
+          ToastAndroid.show('Profile Created!', ToastAndroid.SHORT);
+        }
 
-      if (authResult.isNew) {
-        ToastAndroid.show(
-          `Nickname registered: ${trimmedName}`,
-          ToastAndroid.SHORT,
-        );
-      } else {
-        ToastAndroid.show(`Logged in as: ${trimmedName}`, ToastAndroid.SHORT);
-      }
+        if (authSuccess) {
+          setUserNickname(nick.trim());
+          setUserPassword(pass.trim());
+          cacheStorage.setString(KEY_USER_NICKNAME, nick.trim());
+          cacheStorage.setString(KEY_USER_PASSWORD, pass.trim());
+          setShowNicknameModal(false);
 
-      if (isJoining) {
-        setWatchTogetherModeState(true);
-        setIsSessionLeader(false);
-        setIsSyncingVideo(true);
-        ToastAndroid.show(
-          'Joined Watch Party! Sync enabled.',
-          ToastAndroid.SHORT,
-        );
+          // Apply joining logic
+          if (isJoining && forcedRoomId) {
+            setRoomId(forcedRoomId);
+            setWatchTogetherModeState(true);
+            setIsSessionLeader(false);
+            setIsSyncingVideo(true);
+            ToastAndroid.show('Joined Private Room!', ToastAndroid.SHORT);
+          } else if (!isJoining && !roomId) {
+            // Started as leader, ensure room ID
+            const newRoomId = `${sanitizeFirebaseKey(
+              videoId,
+            )}_${generateRandomId()}`;
+            setRoomId(newRoomId);
+            setWatchTogetherModeState(true);
+          }
+        }
+        return authSuccess;
+      } catch (e) {
+        console.error('Auth Error', e);
+        Alert.alert('Error', 'Could not verify identity. Check internet.');
+        return false;
+      } finally {
+        setIsAuthenticating(false);
       }
     },
-    [authenticateUser],
+    [firebaseConfig, videoId, roomId],
   );
 
   const [isFastForwarding, setIsFastForwarding] = useState(false);
@@ -1060,21 +1037,30 @@ const Player = ({route}: Props): React.JSX.Element => {
     ],
   );
 
+  // --- INITIAL JOIN LOGIC (SYNC LINK) ---
   useEffect(() => {
-    if (route.params?.syncLink) {
-      if (!userNickname) {
+    const paramsRoomId = route.params?.roomId
+      ? decodeURIComponent(route.params.roomId)
+      : null;
+    if (route.params?.syncLink && paramsRoomId) {
+      if (!userNickname || !userPassword) {
+        // If joining with link but no auth, show modal
         setShowNicknameModal(true);
       } else {
+        // Auto-join if credentials exist
+        setRoomId(paramsRoomId);
         setWatchTogetherModeState(true);
         setIsSessionLeader(false);
         setIsSyncingVideo(true);
-        ToastAndroid.show(
-          'Joined Watch Party! Continuous sync enabled.',
-          ToastAndroid.SHORT,
-        );
+        ToastAndroid.show('Joined Private Watch Party!', ToastAndroid.SHORT);
       }
     }
-  }, [route.params?.syncLink, userNickname]);
+  }, [
+    route.params?.syncLink,
+    route.params?.roomId,
+    userNickname,
+    userPassword,
+  ]);
 
   useEffect(() => {
     if (
@@ -1145,17 +1131,20 @@ const Player = ({route}: Props): React.JSX.Element => {
     [],
   );
 
+  // --- SHARE LINK GENERATION ---
   const contentInfoUrl = route.params?.infoUrl || '';
   const contentProviderValue = route.params?.providerValue || provider.value;
   const contentPrimaryTitle =
     route.params?.primaryTitle || activeEpisode?.title || 'Shared Video';
-
   const currentTime = Math.floor(videoPositionRef.current.position);
+
   const urlSafeTitle = encodeURIComponent(contentPrimaryTitle);
   const urlSafeInfoUrl = encodeURIComponent(contentInfoUrl);
   const urlSafeProvider = encodeURIComponent(contentProviderValue);
+  const urlSafeRoomId = encodeURIComponent(roomId || '');
 
-  const shareLink = `vegaNext://watch/video_id=${videoId}&time=${currentTime}&syncLink=true&leader=${encodeURIComponent(
+  // Include roomId in share link to ensure privacy
+  const shareLink = `vegaNext://watch/video_id=${videoId}&time=${currentTime}&syncLink=true&roomId=${urlSafeRoomId}&leader=${encodeURIComponent(
     userNickname,
   )}&infoUrl=${urlSafeInfoUrl}&providerValue=${urlSafeProvider}&primaryTitle=${urlSafeTitle}`;
 
@@ -1768,8 +1757,7 @@ const Player = ({route}: Props): React.JSX.Element => {
             className="absolute top-0 left-0 h-full w-[300px] z-50 bg-black/70 p-3"
             onTouchEnd={e => e.stopPropagation()}>
             <Text className="text-white font-bold text-lg mb-2 border-b border-white/20 pb-1">
-              Watch Together Chat ({userNickname}
-              {syncedOtherUser ? ` vs ${syncedOtherUser}` : ' - Waiting'})
+              Watch Together ({userNickname} vs {syncedOtherUser || 'Waiting'})
             </Text>
 
             {!isSessionLeader && (
@@ -1818,6 +1806,9 @@ const Player = ({route}: Props): React.JSX.Element => {
                   <MaterialIcons name="content-copy" size={16} color="white" />
                 </TouchableOpacity>
               </View>
+              <Text className="text-[10px] text-gray-400 mt-1">
+                Room ID: {roomId || 'Generating...'}
+              </Text>
             </View>
 
             <ScrollView
@@ -2084,7 +2075,7 @@ const Player = ({route}: Props): React.JSX.Element => {
                 <Text className="text-lg font-bold text-center text-white mb-4">
                   Watch Together
                 </Text>
-                {userNickname ? (
+                {userNickname && userPassword ? (
                   <View>
                     <View className="flex-row justify-between items-center my-2">
                       <Text className="text-white text-base">
@@ -2169,18 +2160,10 @@ const Player = ({route}: Props): React.JSX.Element => {
                     {watchTogetherMode && (
                       <View className="mt-4 p-3 border border-green-500 rounded-lg">
                         <Text className="text-green-400 text-sm font-semibold mb-2">
-                          Mode is ON! Playback is{' '}
-                          {isSessionLeader ? 'SENT' : 'RECEIVED'}.
-                          {isReceivingUpdates && (
-                            <Text className="text-yellow-300">
-                              {' '}
-                              (Receiving remote updates)
-                            </Text>
-                          )}
+                          Private Room Active: {roomId?.slice(0, 8)}...
                         </Text>
                         <Text className="text-white text-xs mb-2">
-                          Share this link to invite a friend (requires a sync
-                          server):
+                          Only people with this link can join this session:
                         </Text>
                         <Text className="text-blue-300 text-xs">
                           {shareLink}
@@ -2194,7 +2177,7 @@ const Player = ({route}: Props): React.JSX.Element => {
                     className="p-3 rounded-md items-center"
                     style={{backgroundColor: primary}}>
                     <Text className="text-white font-semibold">
-                      Set Nickname to Enable Watch Together
+                      Login to Enable Watch Together
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -2519,15 +2502,19 @@ const Player = ({route}: Props): React.JSX.Element => {
           setNickname={setUserNickname}
           currentPassword={userPassword}
           setPassword={setUserPassword}
-          isLoading={authLoading}
+          isAuthenticating={isAuthenticating}
           onConfirm={() => {
-            handleSetNickname(
+            const forcedRoomId = route.params?.roomId
+              ? decodeURIComponent(route.params.roomId)
+              : null;
+            const isJoining = !!route.params?.syncLink && !!forcedRoomId;
+            handleSetIdentity(
               userNickname,
               userPassword,
-              !!route.params?.syncLink,
+              isJoining,
+              forcedRoomId,
             );
           }}
-          onCancel={() => setShowNicknameModal(false)}
         />
       )}
     </SafeAreaView>
