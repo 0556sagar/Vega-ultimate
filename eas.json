@@ -9,6 +9,9 @@
       "android": {
         "buildType": "apk",
         "gradleCommand": ":app:assembleDebug"
+      },
+      "ios": {
+        "simulator": true
       }
     },
     "preview": {
@@ -16,12 +19,19 @@
       "android": {
         "buildType": "apk",
         "gradleCommand": ":app:assembleRelease"
+      },
+      "ios": {
+        "simulator": false
       }
     },
     "production": {
+      "distribution": "store",
       "android": {
-        "buildType": "aab",
+        "buildType": "app-bundle",
         "gradleCommand": ":app:bundleRelease"
+      },
+      "ios": {
+        "simulator": false
       }
     }
   },
@@ -30,8 +40,10 @@
       "android": {
         "serviceAccountKeyPath": "./service-account-key.json",
         "track": "internal",
-        "releaseStatus": "inProgress"
-      }
+        "releaseStatus": "inProgress",
+        "rollout": 1
+      },
+      "ios": {}
     }
   }
 }

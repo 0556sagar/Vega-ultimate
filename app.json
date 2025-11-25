@@ -2,9 +2,15 @@
   "expo": {
     "name": "Vega-Next",
     "displayName": "Vega-Next",
+    "slug": "vega-next",
+    "version": "3.2.6",
+    "sdkVersion": "52.0.0",
     "newArchEnabled": true,
+    "userInterfaceStyle": "dark",
     "autolinking": {
-      "exclude": ["expo-splash-screen"]
+      "exclude": [
+        "expo-splash-screen"
+      ]
     },
     "plugins": [
       [
@@ -47,7 +53,10 @@
                   "abi": {
                     "enable": true,
                     "reset": false,
-                    "include": ["armeabi-v7a", "arm64-v8a"]
+                    "include": [
+                      "armeabi-v7a",
+                      "arm64-v8a"
+                    ]
                   }
                 }
               },
@@ -61,10 +70,12 @@
         }
       ]
     ],
-    "slug": "vega-next",
-    "version": "3.2.6",
-    "sdkVersion": "52.0.0",
-    "userInterfaceStyle": "dark",
+    "updates": {
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/671c42c5-ed3c-4e8a-adca-94c20c08055f"
+    },
     "android": {
       "minSdkVersion": 24,
       "edgeToEdgeEnabled": true,
@@ -78,9 +89,25 @@
         "READ_EXTERNAL_STORAGE",
         "READ_MEDIA_VIDEO",
         "WRITE_EXTERNAL_STORAGE",
+        "WRITE_SETTINGS",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "INTERNET",
+        "MANAGE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE",
+        "READ_MEDIA_VIDEO",
+        "WRITE_EXTERNAL_STORAGE",
         "WRITE_SETTINGS"
       ],
       "manifestPermissions": [
+        {
+          "name": "READ_EXTERNAL_STORAGE",
+          "maxSdkVersion": 32
+        },
+        {
+          "name": "WRITE_EXTERNAL_STORAGE",
+          "maxSdkVersion": 32
+        },
         {
           "name": "READ_EXTERNAL_STORAGE",
           "maxSdkVersion": 32
@@ -117,6 +144,24 @@
           "data": {
             "scheme": "vlc"
           }
+        },
+        {
+          "action": "VIEW",
+          "data": {
+            "scheme": "http"
+          }
+        },
+        {
+          "action": "VIEW",
+          "data": {
+            "scheme": "https"
+          }
+        },
+        {
+          "action": "VIEW",
+          "data": {
+            "scheme": "vlc"
+          }
         }
       ],
       "config": {
@@ -131,6 +176,17 @@
       "launchMode": "singleTask",
       "supportsPictureInPicture": true
     },
-    "platforms": ["ios", "android"]
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "671c42c5-ed3c-4e8a-adca-94c20c08055f"
+      }
+    },
+    "owner": "kalipusur",
+    "runtimeVersion": "1.0.0",
+    "ios": {}
   }
 }
