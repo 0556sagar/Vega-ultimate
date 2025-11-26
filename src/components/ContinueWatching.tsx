@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useState, useCallback} from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,146 @@ import AntDesign from '@expo/vector-icons/AntDesign';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import {MaterialCommunityIcons} from '@expo/vector-icons';
 
+// --- Sub-Component for Individual Items (Handles Image Logic) ---
+const MovieCard = React.memo(
+  ({
+    item,
+    progress,
+    isSelected,
+    selectionMode,
+    primary,
+    onPress,
+    onLongPress,
+  }: {
+    item: any;
+    progress: number;
+    isSelected: boolean;
+    selectionMode: boolean;
+    primary: string;
+    onPress: () => void;
+    onLongPress: () => void;
+  }) => {
+    const [imageUri, setImageUri] = useState<string | null>(item?.poster);
+    const [imageError, setImageError] = useState(false);
+
+    // Function to fetch poster from IMDb Suggestion API
+    const fetchImdbImage = async () => {
+      if (!item.title) return;
+
+      try {
+        const query = item.title.toLowerCase().trim();
+        const firstChar = query.charAt(0);
+
+        // Construct the IMDb suggestion API URL
+        // Example: https://v2.sg.media-imdb.com/suggestion/a/avatar.json
+        const url = `https://v2.sg.media-imdb.com/suggestion/${firstChar}/${encodeURIComponent(
+          query,
+        )}.json`;
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        // Check if data exists in the 'd' (data) array
+        if (data && data.d && data.d.length > 0) {
+          // 'i' object contains the image, 'imageUrl' is the link
+          const poster = data.d[0]?.i?.imageUrl;
+          if (poster) {
+            setImageUri(poster);
+          }
+        }
+      } catch (error) {
+        console.warn('IMDb Image Fetch Error:', error);
+      }
+    };
+
+    // If initial poster is missing, try fetching immediately
+    useEffect(() => {
+      if (!item.poster) {
+        fetchImdbImage();
+      }
+    }, [item.poster, item.title]);
+
+    return (
+      <TouchableOpacity
+        activeOpacity={0.8}
+        className="max-w-[100px] mx-2"
+        onLongPress={e => {
+          e.stopPropagation();
+          onLongPress();
+        }}
+        onPress={e => {
+          e.stopPropagation();
+          onPress();
+        }}>
+        <View className="relative">
+          {/* Poster Image with Fallback */}
+          <Image
+            source={
+              imageUri ? {uri: imageUri} : undefined // Replace with your local placeholder if needed, or remove generic source
+            }
+            className="rounded-md bg-gray-800"
+            style={{width: 100, height: 150}}
+            resizeMode="cover"
+            onError={() => {
+              // If the original link fails, try IMDb
+              if (!imageError) {
+                setImageError(true);
+                fetchImdbImage();
+              }
+            }}
+          />
+
+          {/* Selection Indicator */}
+          {selectionMode && (
+            <View className="absolute top-2 right-2 z-50">
+              <View
+                className={`w-5 h-5 rounded-full flex items-center justify-center ${
+                  isSelected ? '' : 'bg-white/30'
+                }`}
+                style={{
+                  borderWidth: 1,
+                  borderColor: 'white',
+                  backgroundColor: isSelected ? primary : undefined,
+                }}>
+                {isSelected && (
+                  <AntDesign name="check" size={12} color="white" />
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* Selection Overlay */}
+          {isSelected && (
+            <View className="absolute top-0 left-0 right-0 bottom-0 bg-black/30 rounded-lg" />
+          )}
+
+          {/* Progress Bar */}
+          <View
+            className="absolute bottom-0 left-0 right-0 h-1"
+            style={{backgroundColor: 'rgba(0,0,0,0.5)'}}>
+            <View
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                height: '100%',
+                width: `${progress}%`,
+                backgroundColor: primary,
+              }}
+            />
+          </View>
+        </View>
+        <Text
+          className="text-white text-center truncate w-24 text-xs mt-1"
+          numberOfLines={2}>
+          {item.title}
+        </Text>
+      </TouchableOpacity>
+    );
+  },
+);
+
+// --- Main Component ---
 const ContinueWatching = () => {
   const {primary} = useThemeStore(state => state);
   const navigation =
@@ -91,7 +231,7 @@ const ContinueWatching = () => {
           console.error('Failed to parse link:', e);
         }
       }
-      console.log('linkData', item.poster);
+
       // Navigate to Info screen
       navigation.navigate('HomeStack', {
         screen: 'Info',
@@ -161,7 +301,7 @@ const ContinueWatching = () => {
     setSelectionMode(false);
   };
 
-  // Only render if we have items (MOVED AFTER ALL HOOKS)
+  // Only render if we have items
   if (recentItems.length === 0) {
     return null;
   }
@@ -199,78 +339,17 @@ const ContinueWatching = () => {
         showsHorizontalScrollIndicator={false}
         keyExtractor={item => item.link}
         contentContainerStyle={{paddingHorizontal: 12}}
-        renderItem={({item}) => {
-          const progress = progressData[item.link] || 0;
-          const isSelected = selectedItems.has(item.link);
-
-          return (
-            <TouchableOpacity
-              activeOpacity={0.8}
-              className="max-w-[100px] mx-2"
-              onLongPress={e => {
-                e.stopPropagation();
-                handleLongPress(item.link);
-              }}
-              onPress={e => {
-                e.stopPropagation();
-                handlePress(item);
-              }}>
-              <View className="relative">
-                {/* Poster Image */}
-                <Image
-                  source={{uri: item?.poster}}
-                  className="rounded-md"
-                  style={{width: 100, height: 150}}
-                />
-
-                {/* Selection Indicator */}
-                {selectionMode && (
-                  <View className="absolute top-2 right-2 z-50">
-                    <View
-                      className={`w-5 h-5 rounded-full flex items-center justify-center ${
-                        isSelected ? '' : 'bg-white/30'
-                      }`}
-                      style={{
-                        borderWidth: 1,
-                        borderColor: 'white',
-                        backgroundColor: isSelected ? primary : undefined,
-                      }}>
-                      {isSelected && (
-                        <AntDesign name="check" size={12} color="white" />
-                      )}
-                    </View>
-                  </View>
-                )}
-
-                {/* Selection Overlay */}
-                {isSelected && (
-                  <View className="absolute top-0 left-0 right-0 bottom-0 bg-black/30 rounded-lg" />
-                )}
-
-                {/* Progress Bar */}
-                <View
-                  className="absolute bottom-0 left-0 right-0 h-1"
-                  style={{backgroundColor: 'rgba(0,0,0,0.5)'}}>
-                  <View
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      top: 0,
-                      height: '100%',
-                      width: `${progress}%`,
-                      backgroundColor: primary,
-                    }}
-                  />
-                </View>
-              </View>
-              <Text
-                className="text-white text-center truncate w-24 text-xs"
-                numberOfLines={2}>
-                {item.title}
-              </Text>
-            </TouchableOpacity>
-          );
-        }}
+        renderItem={({item}) => (
+          <MovieCard
+            item={item}
+            progress={progressData[item.link] || 0}
+            isSelected={selectedItems.has(item.link)}
+            selectionMode={selectionMode}
+            primary={primary}
+            onPress={() => handlePress(item)}
+            onLongPress={() => handleLongPress(item.link)}
+          />
+        )}
       />
     </Pressable>
   );
