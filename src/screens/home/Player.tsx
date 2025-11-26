@@ -68,14 +68,14 @@ interface FirebaseConfig {
 
 // --- FALLBACK CONFIGURATION ---
 const FALLBACK_FIREBASE_CONFIG: FirebaseConfig = {
-  apiKey: 'AIzaSyAesuaUddC4aXLjyMRl7VpFG2-0R36exRU',
-  authDomain: 'together-5dde5.firebaseapp.com',
-  databaseURL: 'https://together-5dde5-default-rtdb.firebaseio.com',
-  projectId: 'together-5dde5',
-  storageBucket: 'together-5dde5.appspot.com',
-  messagingSenderId: '435182801394',
-  appId: '1:435182801394:web:9e283ba6c8949aa70d9b6b',
-  measurementId: 'G-ZM6BDPE2M2',
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'YOUR_PROJECT_ID.firebaseapp.com',
+  databaseURL: 'YOUR_DATA BASE_URL',
+  projectId: 'YOUR_PROJECT_ID',
+  storageBucket: 'YOUR_BUCKET_ID',
+  messagingSenderId: 'YOUR_MESSAGING_ID',
+  appId: 'YOUR_APP_ID',
+  measurementId: 'YOUR_MEASURE_ID',
 };
 
 // --- UTILITY FOR SANITIZING FIREBASE KEYS ---
@@ -261,8 +261,8 @@ const useRealtimeSync = (
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-        const res = await fetch('https://firebase-config-server.vercel.app', {
+        // YOUR Simple firebase server https://firebase.vercel.app
+        const res = await fetch('YOUR FIRE BASE SERVER URL', {
           signal: controller.signal,
           headers: {'Cache-Control': 'no-cache'},
         });
@@ -746,6 +746,10 @@ const Player = ({route}: Props): React.JSX.Element => {
   const hasSkippedIntroRef = useRef(false);
   const lastActiveEpisodeRef = useRef(activeEpisode?.link);
 
+  // --- DEFINED VIDEO ID UPFRONT FOR STORAGE KEYS ---
+  const videoId =
+    route.params?.link || route.params?.video_id || activeEpisode?.link || '';
+
   // --- WATCH TOGETHER STATE ---
   const [watchTogetherMode, setWatchTogetherModeState] = useState(
     getWatchTogetherMode(),
@@ -763,13 +767,35 @@ const Player = ({route}: Props): React.JSX.Element => {
   const [chatMessage, setChatMessage] = useState('');
   const [isSyncingVideo, setIsSyncingVideo] = useState(false);
 
-  // --- ROOM ID MANAGEMENT (ISOLATION) ---
-  const [roomId, setRoomId] = useState<string | null>(
-    route.params?.roomId ? decodeURIComponent(route.params.roomId) : null,
-  );
+  // --- ROOM ID MANAGEMENT (PERSISTENT & QUICK) ---
+  const roomStorageKey = `room_session_${sanitizeFirebaseKey(videoId)}`;
 
-  const videoId =
-    route.params?.link || route.params?.video_id || activeEpisode?.link || '';
+  // Initialize Room ID: Check Params (Link) -> Storage (History) -> Null
+  const [roomId, setRoomId] = useState<string | null>(() => {
+    if (route.params?.roomId) {
+      return decodeURIComponent(route.params.roomId);
+    }
+    // Check if we have a saved session for this specific video
+    const savedRoomId = cacheStorage.getString(roomStorageKey);
+    return savedRoomId || null;
+  });
+
+  // --- SELF-HEALING ROOM ID GENERATION ---
+  // If watch mode is ON but RoomID is missing, generate it immediately.
+  useEffect(() => {
+    if (watchTogetherMode && !roomId && videoId) {
+      const savedRoomId = cacheStorage.getString(roomStorageKey);
+      if (savedRoomId) {
+        setRoomId(savedRoomId);
+      } else {
+        const newRoomId = `${sanitizeFirebaseKey(
+          videoId,
+        )}_${generateRandomId()}`;
+        setRoomId(newRoomId);
+        cacheStorage.setString(roomStorageKey, newRoomId);
+      }
+    }
+  }, [watchTogetherMode, roomId, videoId, roomStorageKey]);
 
   const otherUserNicknameFromLink = useMemo(() => {
     const leaderNickname = route.params?.leader;
@@ -793,7 +819,7 @@ const Player = ({route}: Props): React.JSX.Element => {
     syncedOtherUser,
     firebaseConfig,
     snapToLeader,
-    configLoading, // <--- FIXED: ADDED HERE
+    configLoading,
   } = useRealtimeSync(
     currentSyncKey,
     watchTogetherMode,
@@ -811,12 +837,16 @@ const Player = ({route}: Props): React.JSX.Element => {
           setShowNicknameModal(true);
           return;
         }
-        // If enabling and NO room ID exists, generate a NEW private room
+
+        // --- FIXED LOGIC: GENERATE IMMEDIATELY BEFORE SETTING MODE ---
+        // This ensures the view has an ID to display immediately
         if (!roomId) {
-          const newRoomId = `${sanitizeFirebaseKey(
-            videoId,
-          )}_${generateRandomId()}`;
-          setRoomId(newRoomId);
+          let idToUse = cacheStorage.getString(roomStorageKey);
+          if (!idToUse) {
+            idToUse = `${sanitizeFirebaseKey(videoId)}_${generateRandomId()}`;
+            cacheStorage.setString(roomStorageKey, idToUse);
+          }
+          setRoomId(idToUse);
         }
       }
       setWatchTogetherModeState(mode);
@@ -824,7 +854,7 @@ const Player = ({route}: Props): React.JSX.Element => {
       if (mode) setIsSessionLeader(true);
       if (!mode) setIsSyncingVideo(false);
     },
-    [userNickname, userPassword, roomId, videoId],
+    [userNickname, userPassword, roomId, videoId, roomStorageKey],
   );
 
   // --- AUTH HANDLER ---
@@ -886,16 +916,21 @@ const Player = ({route}: Props): React.JSX.Element => {
           // Apply joining logic
           if (isJoining && forcedRoomId) {
             setRoomId(forcedRoomId);
+            // Save for history if we joined a link
+            cacheStorage.setString(roomStorageKey, forcedRoomId);
+
             setWatchTogetherModeState(true);
             setIsSessionLeader(false);
             setIsSyncingVideo(true);
             ToastAndroid.show('Joined Private Room!', ToastAndroid.SHORT);
           } else if (!isJoining && !roomId) {
-            // Started as leader, ensure room ID
-            const newRoomId = `${sanitizeFirebaseKey(
-              videoId,
-            )}_${generateRandomId()}`;
-            setRoomId(newRoomId);
+            // Started as leader, check storage or generate IMMEDIATELY
+            let newId = cacheStorage.getString(roomStorageKey);
+            if (!newId) {
+              newId = `${sanitizeFirebaseKey(videoId)}_${generateRandomId()}`;
+              cacheStorage.setString(roomStorageKey, newId);
+            }
+            setRoomId(newId);
             setWatchTogetherModeState(true);
           }
         }
@@ -908,7 +943,7 @@ const Player = ({route}: Props): React.JSX.Element => {
         setIsAuthenticating(false);
       }
     },
-    [firebaseConfig, videoId, roomId],
+    [firebaseConfig, videoId, roomId, roomStorageKey],
   );
 
   const [isFastForwarding, setIsFastForwarding] = useState(false);
@@ -1049,6 +1084,9 @@ const Player = ({route}: Props): React.JSX.Element => {
       } else {
         // Auto-join if credentials exist
         setRoomId(paramsRoomId);
+        // Save joined room to history
+        cacheStorage.setString(roomStorageKey, paramsRoomId);
+
         setWatchTogetherModeState(true);
         setIsSessionLeader(false);
         setIsSyncingVideo(true);
@@ -1060,6 +1098,7 @@ const Player = ({route}: Props): React.JSX.Element => {
     route.params?.roomId,
     userNickname,
     userPassword,
+    roomStorageKey,
   ]);
 
   useEffect(() => {
@@ -1270,7 +1309,7 @@ const Player = ({route}: Props): React.JSX.Element => {
       setTimeout(() => {
         playerRef?.current?.resume();
         setIsPlaying(true);
-      }, 125);
+      }, 75);
     }, 300);
   }, [setBasePlaybackRate]);
 
